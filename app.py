@@ -23,7 +23,9 @@ except ImportError as e:
     st.error(f"❌ Import 錯誤: {str(e)}")
     st.info("請確認 backend/ 目錄下的所有文件都已上傳")
     st.stop()
-
+if error:
+    st.error(f"❌ {error}")
+    st.info("請確認以下文件已上傳...")
 # ========== 頁面配置 ==========
 st.set_page_config(
     page_title="AI Fashion Assistant",
