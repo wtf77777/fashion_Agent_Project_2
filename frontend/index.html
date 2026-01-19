@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="AI 智慧衣櫥管理系統">
+    <title>🌟 AI 時尚顧問</title>
+    
+    <!-- CSS -->
+    <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="css/upload.css">
+    <link rel="stylesheet" href="css/wardrobe.css">
+    <link rel="stylesheet" href="css/recommendation.css">
+</head>
+<body>
+    <!-- Loading Overlay -->
+    <div id="loading-overlay" class="loading-overlay">
+        <div class="spinner"></div>
+        <p>載入中...</p>
+    </div>
+
+    <!-- Top Navigation -->
+    <nav class="top-nav">
+        <div class="container">
+            <div class="nav-brand">
+                <h1>🌟 AI 時尚顧問</h1>
+            </div>
+            <div class="nav-user" id="user-info">
+                <span id="username-display">未登入</span>
+                <button id="logout-btn" class="btn btn-secondary" style="display: none;">
+                    🚪 登出
+                </button>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Weather Widget -->
+    <div id="weather-widget" class="weather-widget" style="display: none;">
+        <div class="container">
+            <div class="weather-content">
+                <div class="weather-city">
+                    <h3 id="weather-city-name">台北</h3>
+                </div>
+                <div class="weather-metrics">
+                    <div class="metric">
+                        <span class="metric-label">🌡️ 溫度</span>
+                        <span class="metric-value" id="weather-temp">--°C</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">🤚 體感</span>
+                        <span class="metric-value" id="weather-feels">--°C</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">☁️ 天氣</span>
+                        <span class="metric-value" id="weather-desc">--</span>
+                    </div>
+                </div>
+            </div>
+            <p class="weather-update" id="weather-update-time"></p>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <main class="main-content">
+        <div class="container">
+            <!-- Login/Register Section -->
+            <div id="auth-section" class="auth-section">
+                <div class="auth-container">
+                    <div class="auth-tabs">
+                        <button class="tab-btn active" data-tab="login">🔒 登入</button>
+                        <button class="tab-btn" data-tab="register">📝 註冊</button>
+                    </div>
+
+                    <!-- Login Form -->
+                    <div id="login-tab" class="tab-content active">
+                        <h2>登入帳號</h2>
+                        <form id="login-form">
+                            <div class="form-group">
+                                <label for="login-username">使用者名稱</label>
+                                <input type="text" id="login-username" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="login-password">密碼</label>
+                                <input type="password" id="login-password" required>
+                            </div>
+                            <button type="submit" class="btn btn-primary">登入</button>
+                        </form>
+                    </div>
+
+                    <!-- Register Form -->
+                    <div id="register-tab" class="tab-content">
+                        <h2>註冊新帳號</h2>
+                        <form id="register-form">
+                            <div class="form-group">
+                                <label for="register-username">使用者名稱</label>
+                                <input type="text" id="register-username" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="register-password">密碼</label>
+                                <input type="password" id="register-password" required minlength="6">
+                            </div>
+                            <div class="form-group">
+                                <label for="register-password2">確認密碼</label>
+                                <input type="password" id="register-password2" required minlength="6">
+                            </div>
+                            <button type="submit" class="btn btn-primary">註冊</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+
+            <!-- App Content (Hidden until logged in) -->
+            <div id="app-content" style="display: none;">
+                <!-- Tab Navigation -->
+                <div class="app-tabs">
+                    <button class="app-tab-btn active" data-page="upload">
+                        📸 上傳入庫
+                    </button>
+                    <button class="app-tab-btn" data-page="wardrobe">
+                        👔 我的衣櫥
+                    </button>
+                    <button class="app-tab-btn" data-page="recommendation">
+                        💡 今日推薦
+                    </button>
+                </div>
+
+                <!-- Upload Page -->
+                <div id="upload-page" class="page-content active">
+                    <h2>上傳新衣到雲端</h2>
+                    
+                    <div class="upload-zone" id="upload-zone">
+                        <input type="file" id="file-input" multiple accept="image/jpeg,image/png,image/jpg" style="display: none;">
+                        <div class="upload-placeholder" id="upload-placeholder">
+                            <svg width="60" height="60" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
+                            </svg>
+                            <p>拖曳圖片到這裡，或點擊選擇文件</p>
+                            <small>支援 JPG, PNG (建議 5-10 張)</small>
+                        </div>
+                        <div class="upload-preview" id="upload-preview" style="display: none;"></div>
+                    </div>
+
+                    <div id="upload-actions" style="display: none;">
+                        <div class="upload-stats">
+                            <span id="upload-count">已選擇 0 張照片</span>
+                        </div>
+                        <button id="batch-upload-btn" class="btn btn-primary btn-large">
+                            🚀 批量辨識並上傳全部
+                        </button>
+                    </div>
+
+                    <div class="info-box">
+                        <h4>📌 使用提示:</h4>
+                        <ul>
+                            <li>拍攝清晰的單件衣服照片</li>
+                            <li>背景簡潔有助於 AI 辨識</li>
+                            <li>🚀 批量上傳模式: 5-10 張最佳 (只需 1 次 API 呼叫)</li>
+                            <li>系統會自動過濾重複的衣服</li>
+                            <li>已上傳的圖片會自動從列表移除</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Wardrobe Page -->
+                <div id="wardrobe-page" class="page-content">
+                    <h2>我的雲端衣櫥</h2>
+                    
+                    <div class="wardrobe-actions">
+                        <button id="refresh-wardrobe-btn" class="btn btn-secondary">
+                            🔄 重新整理
+                        </button>
+                        <button id="batch-delete-btn" class="btn btn-secondary">
+                            🗑️ 批量刪除
+                        </button>
+                    </div>
+
+                    <div id="wardrobe-stats" class="stats-grid">
+                        <div class="stat-card">
+                            <span class="stat-label">總計</span>
+                            <span class="stat-value" id="total-items">0</span>
+                        </div>
+                    </div>
+
+                    <div id="wardrobe-grid" class="wardrobe-grid">
+                        <!-- Items will be loaded here -->
+                    </div>
+
+                    <div id="wardrobe-empty" class="empty-state" style="display: none;">
+                        <p>衣櫥是空的，去上傳一些衣服吧！ 👕</p>
+                    </div>
+                </div>
+
+                <!-- Recommendation Page -->
+                <div id="recommendation-page" class="page-content">
+                    <h2>今日穿搭推薦</h2>
+                    
+                    <div class="recommendation-form">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="city-select">🌍 選擇城市</label>
+                                <select id="city-select">
+                                    <option value="Taipei">台北 (Taipei)</option>
+                                    <option value="New Taipei">新北 (New Taipei)</option>
+                                    <option value="Taoyuan">桃園 (Taoyuan)</option>
+                                    <option value="Taichung">台中 (Taichung)</option>
+                                    <option value="Tainan">台南 (Tainan)</option>
+                                    <option value="Kaohsiung">高雄 (Kaohsiung)</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="style-input">💫 想要什麼風格？</label>
+                                <input type="text" id="style-input" placeholder="例如：日系簡約、美式復古...">
+                                <small>留空則由 AI 自由發揮</small>
+                            </div>
+                            <div class="form-group">
+                                <label for="occasion-input">📍 要去什麼場合/活動？</label>
+                                <input type="text" id="occasion-input" placeholder="例如：公司開會、約會看電影...">
+                                <small>預設為：外出遊玩</small>
+                            </div>
+                        </div>
+                        <button id="get-recommendation-btn" class="btn btn-primary btn-large">
+                            ✨ 獲取今日推薦
+                        </button>
+                    </div>
+
+                    <div id="recommendation-result" class="recommendation-result" style="display: none;">
+                        <h3>🎨 今日穿搭建議</h3>
+                        <div id="recommendation-text" class="recommendation-text"></div>
+                        
+                        <h3>👔 推薦單品展示</h3>
+                        <div id="recommendation-items" class="recommendation-carousel">
+                            <!-- Items will be loaded here -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Scroll to Top Button -->
+    <button id="scroll-top-btn" class="scroll-top-btn" title="回到頂端">
+        ⬆️
+    </button>
+
+    <!-- Toast Notification -->
+    <div id="toast" class="toast"></div>
+
+    <!-- JavaScript -->
+    <script src="js/api.js"></script>
+    <script src="js/upload.js"></script>
+    <script src="js/wardrobe.js"></script>
+    <script src="js/recommendation.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>
