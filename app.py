@@ -1,17 +1,22 @@
 """
-Streamlit API 服務器 - Streamlit Cloud 優化版本
-使用 localStorage + 輪詢機制處理通信
+Streamlit API 服務器
+提供前端所需的所有 API 端點
 """
 import streamlit as st
 import streamlit.components.v1 as components
 from pathlib import Path
 import json
-import time
+import sys
+from datetime import datetime
 
-from backend.config import AppConfig
-from backend.database.supabase_client import SupabaseClient
-from backend.api.ai_service import AIService
-from backend.api.weather_service import WeatherService
+# 添加 backend 到路徑
+sys.path.insert(0, str(Path(__file__).parent / 'backend'))
+
+from config import AppConfig
+from database.supabase_client import SupabaseClient
+from api.ai_service import AIService
+from api.weather_service import WeatherService
+from api.wardrobe_service import WardrobeService
 
 # ========== 頁面配置 ==========
 st.set_page_config(
@@ -46,16 +51,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ========== 初始化 Session State ==========
-if 'user_id' not in st.session_state:
-    st.session_state.user_id = None
-if 'username' not in st.session_state:
-    st.session_state.username = None
-if 'login_request' not in st.session_state:
-    st.session_state.login_request = None
-if 'register_request' not in st.session_state:
-    st.session_state.register_request = None
-
 # ========== 初始化服務 ==========
 @st.cache_resource
 def init_services():
@@ -75,154 +70,9 @@ def init_services():
 
 services = init_services()
 
-# ========== API 處理函數 ==========
-def api_login(username: str, password: str):
-    """登入 API"""
-    if not services['supabase']:
-        return {'success': False, 'message': 'Database not configured'}
-    
-    try:
-        result = services['supabase'].client.table("users")\
-            .select("*")\
-            .eq("username", username)\
-            .eq("password", password)\
-            .execute()
-        
-        if result.data:
-            st.session_state.user_id = result.data[0]['id']
-            st.session_state.username = username
-            
-            return {
-                'success': True,
-                'user_id': result.data[0]['id'],
-                'username': username
-            }
-        else:
-            return {'success': False, 'message': '帳號或密碼錯誤'}
-    except Exception as e:
-        return {'success': False, 'message': str(e)}
-
-def api_register(username: str, password: str):
-    """註冊 API"""
-    if not services['supabase']:
-        return {'success': False, 'message': 'Database not configured'}
-    
-    try:
-        existing = services['supabase'].client.table("users")\
-            .select("id")\
-            .eq("username", username)\
-            .execute()
-        
-        if existing.data:
-            return {'success': False, 'message': '使用者名稱已存在'}
-        
-        result = services['supabase'].client.table("users")\
-            .insert({"username": username, "password": password})\
-            .execute()
-        
-        return {'success': True, 'message': '註冊成功'}
-    except Exception as e:
-        return {'success': False, 'message': str(e)}
-
-def api_weather(city: str = 'Taipei'):
-    """天氣 API"""
-    if not services['weather']:
-        return {'success': False, 'message': 'Weather service not configured'}
-    
-    weather = services['weather'].get_weather(city)
-    if weather:
-        return weather.to_dict()
-    return {'success': False, 'message': 'Weather data not found'}
-
-# ========== 創建通信腳本 ==========
-def create_communication_bridge(response_data=None):
-    """創建前後端通信橋接"""
-    response_json = json.dumps(response_data) if response_data else 'null'
-    
-    return f"""
-    <script>
-    // 全局 API 對象
-    window.FashionAPI = {{
-        currentResponse: {response_json},
-        
-        // 登入
-        login: async function(username, password) {{
-            // 使用 query parameters 觸發 Streamlit 重新運行
-            const params = new URLSearchParams(window.location.search);
-            params.set('action', 'login');
-            params.set('username', username);
-            params.set('password', password);
-            params.set('t', Date.now()); // 添加時間戳避免緩存
-            window.location.search = params.toString();
-        }},
-        
-        // 註冊
-        register: async function(username, password) {{
-            const params = new URLSearchParams(window.location.search);
-            params.set('action', 'register');
-            params.set('username', username);
-            params.set('password', password);
-            params.set('t', Date.now());
-            window.location.search = params.toString();
-        }},
-        
-        // 獲取天氣
-        getWeather: async function(city) {{
-            const params = new URLSearchParams(window.location.search);
-            params.set('action', 'weather');
-            params.set('city', city);
-            params.set('t', Date.now());
-            window.location.search = params.toString();
-        }},
-        
-        // 清除參數
-        clearParams: function() {{
-            if (window.location.search) {{
-                window.history.replaceState({{}}, '', window.location.pathname);
-            }}
-        }}
-    }};
-    
-    // 如果有響應數據，觸發事件
-    if (window.FashionAPI.currentResponse) {{
-        window.dispatchEvent(new CustomEvent('apiResponse', {{
-            detail: window.FashionAPI.currentResponse
-        }}));
-        
-        // 清除 URL 參數
-        setTimeout(() => {{
-            window.FashionAPI.clearParams();
-        }}, 100);
-    }}
-    </script>
-    """
-
 # ========== 讀取並渲染前端 ==========
 def load_frontend():
     """載入完整的前端應用"""
-    
-    # 檢查是否有 API 請求
-    query_params = st.query_params
-    response_data = None
-    
-    if 'action' in query_params:
-        action = query_params['action']
-        
-        if action == 'login':
-            username = query_params.get('username', '')
-            password = query_params.get('password', '')
-            response_data = api_login(username, password)
-            
-        elif action == 'register':
-            username = query_params.get('username', '')
-            password = query_params.get('password', '')
-            response_data = api_register(username, password)
-            
-        elif action == 'weather':
-            city = query_params.get('city', 'Taipei')
-            response_data = api_weather(city)
-    
-    # 讀取前端文件
     frontend_dir = Path(__file__).parent / 'frontend'
     
     # 讀取 HTML
@@ -250,17 +100,120 @@ def load_frontend():
     
     # 組合完整的 HTML
     full_html = html_content.replace('</head>', f'<style>{css_content}</style></head>')
-    
-    # 在 body 結束前插入通信橋接和 JS
-    bridge_script = create_communication_bridge(response_data)
-    full_html = full_html.replace('</body>', f'{bridge_script}<script>{js_content}</script></body>')
+    full_html = full_html.replace('</body>', f'<script>{js_content}</script></body>')
     
     # 渲染
     components.html(full_html, height=1000, scrolling=True)
 
+# ========== API 處理函數 ==========
+def handle_api_request():
+    """處理 API 請求"""
+    # 獲取請求參數
+    query_params = st.query_params
+    
+    if 'api' not in query_params:
+        return None
+    
+    api_endpoint = query_params['api']
+    
+    try:
+        # 路由到對應的 API 處理函數
+        if api_endpoint == 'login':
+            return api_login()
+        elif api_endpoint == 'register':
+            return api_register()
+        elif api_endpoint == 'weather':
+            return api_weather()
+        elif api_endpoint == 'upload':
+            return api_upload()
+        elif api_endpoint == 'wardrobe':
+            return api_wardrobe()
+        elif api_endpoint == 'delete':
+            return api_delete_item()
+        elif api_endpoint == 'batch_delete':
+            return api_batch_delete()
+        elif api_endpoint == 'recommendation':
+            return api_recommendation()
+        else:
+            return {'success': False, 'message': 'Unknown API endpoint'}
+    except Exception as e:
+        return {'success': False, 'message': str(e)}
+
+# ========== API 端點實現 ==========
+def api_login():
+    """登入 API"""
+    username = st.query_params.get('username', '')
+    password = st.query_params.get('password', '')
+    
+    if not services['supabase']:
+        return {'success': False, 'message': 'Database not configured'}
+    
+    try:
+        result = services['supabase'].client.table("users")\
+            .select("*")\
+            .eq("username", username)\
+            .eq("password", password)\
+            .execute()
+        
+        if result.data:
+            return {
+                'success': True,
+                'user_id': result.data[0]['id'],
+                'username': username
+            }
+        else:
+            return {'success': False, 'message': '帳號或密碼錯誤'}
+    except Exception as e:
+        return {'success': False, 'message': str(e)}
+
+def api_register():
+    """註冊 API"""
+    username = st.query_params.get('username', '')
+    password = st.query_params.get('password', '')
+    
+    if not services['supabase']:
+        return {'success': False, 'message': 'Database not configured'}
+    
+    try:
+        # 檢查用戶名是否存在
+        existing = services['supabase'].client.table("users")\
+            .select("id")\
+            .eq("username", username)\
+            .execute()
+        
+        if existing.data:
+            return {'success': False, 'message': '使用者名稱已存在'}
+        
+        # 創建新用戶
+        result = services['supabase'].client.table("users")\
+            .insert({"username": username, "password": password})\
+            .execute()
+        
+        return {'success': True, 'message': '註冊成功'}
+    except Exception as e:
+        return {'success': False, 'message': str(e)}
+
+def api_weather():
+    """天氣 API"""
+    city = st.query_params.get('city', 'Taipei')
+    
+    if not services['weather']:
+        return None
+    
+    weather = services['weather'].get_weather(city)
+    if weather:
+        return weather.to_dict()
+    return None
+
 # ========== 主程式 ==========
 def main():
-    load_frontend()
+    # 檢查是否是 API 請求
+    if 'api' in st.query_params:
+        result = handle_api_request()
+        st.json(result)
+    else:
+        # 渲染前端
+        load_frontend()
 
 if __name__ == "__main__":
     main()
