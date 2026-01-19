@@ -8,28 +8,15 @@ from pathlib import Path
 import json
 import sys
 from datetime import datetime
-import base64
-import io
-from PIL import Image
 
-# ========== 修正 Import 路徑 ==========
-# 添加 backend 到 Python 路徑
-backend_path = Path(__file__).parent / 'backend'
-if str(backend_path) not in sys.path:
-    sys.path.insert(0, str(backend_path))
+# 添加 backend 到路徑
+sys.path.insert(0, str(Path(__file__).parent / 'backend'))
 
-# 現在可以直接 import
-try:
-    from config import AppConfig
-    from database.supabase_client import SupabaseClient
-    from database.models import ClothingItem, WeatherData
-    from api.ai_service import AIService
-    from api.weather_service import WeatherService
-    from api.wardrobe_service import WardrobeService
-except ImportError as e:
-    st.error(f"❌ Import 錯誤: {str(e)}")
-    st.info("請確認 backend/ 目錄下的所有文件都已上傳")
-    st.stop()
+from config import AppConfig
+from database.supabase_client import SupabaseClient
+from api.ai_service import AIService
+from api.weather_service import WeatherService
+from api.wardrobe_service import WardrobeService
 
 # ========== 頁面配置 ==========
 st.set_page_config(
@@ -47,16 +34,19 @@ st.markdown("""
     footer {visibility: hidden;}
     .stDeployButton {visibility: hidden;}
     
-    /* 讓 iframe 填滿整個視窗 */
-    .main .block-container {
-        padding: 0;
-        max-width: 100%;
-    }
-    
     iframe {
+        position: fixed;
+        top: 0;
+        left: 0;
+        bottom: 0;
+        right: 0;
         width: 100%;
-        height: 100vh;
+        height: 100%;
         border: none;
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+        z-index: 999999;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -65,101 +55,100 @@ st.markdown("""
 @st.cache_resource
 def init_services():
     """初始化所有服務"""
-    try:
-        config = AppConfig.from_secrets()
-        if config is None:
-            config = AppConfig.from_env()
-        
-        supabase_client = None
-        if config.supabase_url and config.supabase_key:
-            supabase_client = SupabaseClient(config.supabase_url, config.supabase_key)
-        
-        services = {
-            'config': config,
-            'supabase': supabase_client,
-            'ai': AIService(config.gemini_api_key) if config.gemini_api_key else None,
-            'weather': WeatherService(config.weather_api_key) if config.weather_api_key else None,
-            'wardrobe': WardrobeService(supabase_client) if supabase_client else None
-        }
-        
-        return services
-    except Exception as e:
-        st.error(f"服務初始化失敗: {str(e)}")
-        return None
+    config = AppConfig.from_secrets()
+    if config is None:
+        config = AppConfig.from_env()
+    
+    services = {
+        'config': config,
+        'supabase': SupabaseClient(config.supabase_url, config.supabase_key) if config.supabase_url else None,
+        'ai': AIService(config.gemini_api_key) if config.gemini_api_key else None,
+        'weather': WeatherService(config.weather_api_key) if config.weather_api_key else None
+    }
+    
+    return services
 
-# ========== 讀取前端文件 ==========
-@st.cache_data
-def load_frontend_files():
-    """載入所有前端文件"""
+services = init_services()
+
+# ========== 讀取並渲染前端 ==========
+def load_frontend():
+    """載入完整的前端應用"""
     frontend_dir = Path(__file__).parent / 'frontend'
     
-    if not frontend_dir.exists():
-        return None, "frontend 目錄不存在"
+    # 讀取 HTML
+    html_file = frontend_dir / 'index.html'
+    with open(html_file, 'r', encoding='utf-8') as f:
+        html_content = f.read()
+    
+    # 讀取 CSS
+    css_files = ['style.css', 'upload.css', 'wardrobe.css', 'recommendation.css']
+    css_content = ''
+    for css_file in css_files:
+        css_path = frontend_dir / 'css' / css_file
+        if css_path.exists():
+            with open(css_path, 'r', encoding='utf-8') as f:
+                css_content += f.read() + '\n'
+    
+    # 讀取 JS
+    js_files = ['api.js', 'app.js', 'upload.js', 'wardrobe.js', 'recommendation.js']
+    js_content = ''
+    for js_file in js_files:
+        js_path = frontend_dir / 'js' / js_file
+        if js_path.exists():
+            with open(js_path, 'r', encoding='utf-8') as f:
+                js_content += f.read() + '\n'
+    
+    # 組合完整的 HTML
+    full_html = html_content.replace('</head>', f'<style>{css_content}</style></head>')
+    full_html = full_html.replace('</body>', f'<script>{js_content}</script></body>')
+    
+    # 渲染
+    components.html(full_html, height=1000, scrolling=True)
+
+# ========== API 處理函數 ==========
+def handle_api_request():
+    """處理 API 請求"""
+    # 獲取請求參數
+    query_params = st.query_params
+    
+    if 'api' not in query_params:
+        return None
+    
+    api_endpoint = query_params['api']
     
     try:
-        # 讀取 HTML
-        html_file = frontend_dir / 'index.html'
-        if not html_file.exists():
-            return None, "index.html 不存在"
-        
-        with open(html_file, 'r', encoding='utf-8') as f:
-            html_content = f.read()
-        
-        # 讀取所有 CSS
-        css_content = ''
-        css_files = ['style.css', 'upload.css', 'wardrobe.css', 'recommendation.css']
-        for css_file in css_files:
-            css_path = frontend_dir / 'css' / css_file
-            if css_path.exists():
-                with open(css_path, 'r', encoding='utf-8') as f:
-                    css_content += f'/* {css_file} */\n{f.read()}\n\n'
-        
-        # 讀取所有 JS
-        js_content = ''
-        js_files = ['api.js', 'app.js', 'upload.js', 'wardrobe.js', 'recommendation.js']
-        for js_file in js_files:
-            js_path = frontend_dir / 'js' / js_file
-            if js_path.exists():
-                with open(js_path, 'r', encoding='utf-8') as f:
-                    js_content += f'// {js_file}\n{f.read()}\n\n'
-        
-        # 組合完整 HTML
-        full_html = html_content.replace(
-            '<link rel="stylesheet" href="css/style.css">',
-            f'<style>{css_content}</style>'
-        ).replace(
-            '<script src="js/api.js"></script>',
-            ''
-        ).replace(
-            '</body>',
-            f'<script>{js_content}</script></body>'
-        )
-        
-        # 移除其他外部引用
-        full_html = full_html.replace('<link rel="stylesheet" href="css/upload.css">', '')
-        full_html = full_html.replace('<link rel="stylesheet" href="css/wardrobe.css">', '')
-        full_html = full_html.replace('<link rel="stylesheet" href="css/recommendation.css">', '')
-        full_html = full_html.replace('<script src="js/app.js"></script>', '')
-        full_html = full_html.replace('<script src="js/upload.js"></script>', '')
-        full_html = full_html.replace('<script src="js/wardrobe.js"></script>', '')
-        full_html = full_html.replace('<script src="js/recommendation.js"></script>', '')
-        
-        return full_html, None
-        
+        # 路由到對應的 API 處理函數
+        if api_endpoint == 'login':
+            return api_login()
+        elif api_endpoint == 'register':
+            return api_register()
+        elif api_endpoint == 'weather':
+            return api_weather()
+        elif api_endpoint == 'upload':
+            return api_upload()
+        elif api_endpoint == 'wardrobe':
+            return api_wardrobe()
+        elif api_endpoint == 'delete':
+            return api_delete_item()
+        elif api_endpoint == 'batch_delete':
+            return api_batch_delete()
+        elif api_endpoint == 'recommendation':
+            return api_recommendation()
+        else:
+            return {'success': False, 'message': 'Unknown API endpoint'}
     except Exception as e:
-        return None, f"讀取前端文件失敗: {str(e)}"
+        return {'success': False, 'message': str(e)}
 
-# ========== API 端點處理 ==========
-def api_login(services):
+# ========== API 端點實現 ==========
+def api_login():
     """登入 API"""
+    username = st.query_params.get('username', '')
+    password = st.query_params.get('password', '')
+    
+    if not services['supabase']:
+        return {'success': False, 'message': 'Database not configured'}
+    
     try:
-        # 從 query params 獲取參數
-        username = st.query_params.get('username', '')
-        password = st.query_params.get('password', '')
-        
-        if not services or not services['supabase']:
-            return {'success': False, 'message': '資料庫未配置'}
-        
         result = services['supabase'].client.table("users")\
             .select("*")\
             .eq("username", username)\
@@ -177,15 +166,15 @@ def api_login(services):
     except Exception as e:
         return {'success': False, 'message': str(e)}
 
-def api_register(services):
+def api_register():
     """註冊 API"""
+    username = st.query_params.get('username', '')
+    password = st.query_params.get('password', '')
+    
+    if not services['supabase']:
+        return {'success': False, 'message': 'Database not configured'}
+    
     try:
-        username = st.query_params.get('username', '')
-        password = st.query_params.get('password', '')
-        
-        if not services or not services['supabase']:
-            return {'success': False, 'message': '資料庫未配置'}
-        
         # 檢查用戶名是否存在
         existing = services['supabase'].client.table("users")\
             .select("id")\
@@ -204,74 +193,27 @@ def api_register(services):
     except Exception as e:
         return {'success': False, 'message': str(e)}
 
-def api_weather(services):
+def api_weather():
     """天氣 API"""
-    try:
-        city = st.query_params.get('city', 'Taipei')
-        
-        if not services or not services['weather']:
-            return {'success': False, 'message': '天氣服務未配置'}
-        
-        weather = services['weather'].get_weather(city)
-        if weather:
-            return weather.to_dict()
+    city = st.query_params.get('city', 'Taipei')
+    
+    if not services['weather']:
         return None
-    except Exception as e:
-        return {'success': False, 'message': str(e)}
+    
+    weather = services['weather'].get_weather(city)
+    if weather:
+        return weather.to_dict()
+    return None
 
 # ========== 主程式 ==========
 def main():
-    # 初始化服務
-    services = init_services()
-    
-    if services is None:
-        st.error("❌ 服務初始化失敗")
-        st.info("請檢查 Streamlit Secrets 配置")
-        st.stop()
-    
     # 檢查是否是 API 請求
     if 'api' in st.query_params:
-        api_endpoint = st.query_params['api']
-        
-        result = None
-        if api_endpoint == 'login':
-            result = api_login(services)
-        elif api_endpoint == 'register':
-            result = api_register(services)
-        elif api_endpoint == 'weather':
-            result = api_weather(services)
-        else:
-            result = {'success': False, 'message': 'Unknown API endpoint'}
-        
-        # 返回 JSON
+        result = handle_api_request()
         st.json(result)
-        return
-    
-    # 載入前端
-    html_content, error = load_frontend_files()
-    
-    if error:
-        st.error(f"❌ {error}")
-        st.info("請確認以下文件已上傳到 GitHub:")
-        st.code("""
-frontend/
-├── index.html
-├── css/
-│   ├── style.css
-│   ├── upload.css
-│   ├── wardrobe.css
-│   └── recommendation.css
-└── js/
-    ├── api.js
-    ├── app.js
-    ├── upload.js
-    ├── wardrobe.js
-    └── recommendation.js
-        """)
-        st.stop()
-    
-    # 渲染前端
-    components.html(html_content, height=800, scrolling=True)
+    else:
+        # 渲染前端
+        load_frontend()
 
 if __name__ == "__main__":
     main()
