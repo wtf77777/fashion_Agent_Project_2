@@ -1,290 +1,423 @@
-// ========== API 配置 ==========
-const API_BASE_URL = window.location.origin;
+"""
+Streamlit API 服務器 - Streamlit Cloud 優化版本
+使用 localStorage + 輪詢機制處理通信
+"""
+import streamlit as st
+import streamlit.components.v1 as components
+from pathlib import Path
+import json
+import time
 
-// ========== API 請求封裝 ==========
-const API = {
-    // 通用請求方法
-    async request(endpoint, options = {}) {
-        const url = `${API_BASE_URL}${endpoint}`;
+from backend.config import AppConfig
+from backend.database.supabase_client import SupabaseClient
+from backend.api.ai_service import AIService
+from backend.api.weather_service import WeatherService
+
+# ========== 頁面配置 ==========
+st.set_page_config(
+    page_title="AI Fashion Assistant",
+    page_icon="🌟",
+    layout="wide",
+    initial_sidebar_state="collapsed"
+)
+
+# ========== 隱藏 Streamlit 默認 UI ==========
+st.markdown("""
+<style>
+    header {visibility: hidden;}
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    .stDeployButton {visibility: hidden;}
+    
+    iframe {
+        position: fixed;
+        top: 0;
+        left: 0;
+        bottom: 0;
+        right: 0;
+        width: 100%;
+        height: 100%;
+        border: none;
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+        z-index: 999999;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# ========== 初始化 Session State ==========
+if 'user_id' not in st.session_state:
+    st.session_state.user_id = None
+if 'username' not in st.session_state:
+    st.session_state.username = None
+if 'login_request' not in st.session_state:
+    st.session_state.login_request = None
+if 'register_request' not in st.session_state:
+    st.session_state.register_request = None
+
+# ========== 初始化服務 ==========
+@st.cache_resource
+def init_services():
+    """初始化所有服務"""
+    config = AppConfig.from_secrets()
+    if config is None:
+        config = AppConfig.from_env()
+    
+    services = {
+        'config': config,
+        'supabase': SupabaseClient(config.supabase_url, config.supabase_key) if config.supabase_url else None,
+        'ai': AIService(config.gemini_api_key) if config.gemini_api_key else None,
+        'weather': WeatherService(config.weather_api_key) if config.weather_api_key else None
+    }
+    
+    return services
+
+services = init_services()
+
+# ========== API 處理函數 ==========
+def api_login(username: str, password: str):
+    """登入 API"""
+    if not services['supabase']:
+        return {'success': False, 'message': 'Database not configured'}
+    
+    try:
+        result = services['supabase'].client.table("users")\
+            .select("*")\
+            .eq("username", username)\
+            .eq("password", password)\
+            .execute()
         
-        const config = {
-            headers: {
-                'Content-Type': 'application/json',
-                ...options.headers
-            },
-            ...options
-        };
-        
-        // 添加使用者認證
-        const user = AppState.getUser();
-        if (user) {
-            config.headers['X-User-ID'] = user.id;
-            config.headers['X-Username'] = user.username;
-        }
-        
-        try {
-            const response = await fetch(url, config);
+        if result.data:
+            st.session_state.user_id = result.data[0]['id']
+            st.session_state.username = username
             
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            return {
+                'success': True,
+                'user_id': result.data[0]['id'],
+                'username': username
             }
-            
-            const data = await response.json();
-            return data;
-        } catch (error) {
-            console.error('API 請求失敗:', error);
-            throw error;
-        }
-    },
-    
-    // ========== 認證 API ==========
-    async login(username, password) {
-        return this.request('/api/login', {
-            method: 'POST',
-            body: JSON.stringify({ username, password })
-        });
-    },
-    
-    async register(username, password) {
-        return this.request('/api/register', {
-            method: 'POST',
-            body: JSON.stringify({ username, password })
-        });
-    },
-    
-    // ========== 天氣 API ==========
-    async getWeather(city) {
-        return this.request(`/api/weather?city=${encodeURIComponent(city)}`);
-    },
-    
-    // ========== 上傳 API ==========
-    async uploadImages(files) {
-        const formData = new FormData();
-        
-        files.forEach((file, index) => {
-            formData.append(`file_${index}`, file);
-        });
-        
-        const user = AppState.getUser();
-        formData.append('user_id', user.id);
-        
-        // 使用 multipart/form-data
-        const response = await fetch(`${API_BASE_URL}/api/upload`, {
-            method: 'POST',
-            headers: {
-                'X-User-ID': user.id,
-                'X-Username': user.username
-            },
-            body: formData
-        });
-        
-        if (!response.ok) {
-            throw new Error(`上傳失敗: ${response.statusText}`);
-        }
-        
-        return response.json();
-    },
-    
-    // ========== 衣櫥 API ==========
-    async getWardrobe() {
-        const user = AppState.getUser();
-        return this.request(`/api/wardrobe?user_id=${user.id}`);
-    },
-    
-    async deleteItem(itemId) {
-        const user = AppState.getUser();
-        return this.request('/api/wardrobe/delete', {
-            method: 'POST',
-            body: JSON.stringify({
-                user_id: user.id,
-                item_id: itemId
-            })
-        });
-    },
-    
-    async batchDeleteItems(itemIds) {
-        const user = AppState.getUser();
-        return this.request('/api/wardrobe/batch-delete', {
-            method: 'POST',
-            body: JSON.stringify({
-                user_id: user.id,
-                item_ids: itemIds
-            })
-        });
-    },
-    
-    // ========== 推薦 API ==========
-    async getRecommendation(city, style, occasion) {
-        const user = AppState.getUser();
-        return this.request('/api/recommendation', {
-            method: 'POST',
-            body: JSON.stringify({
-                user_id: user.id,
-                city: city,
-                style: style || '不限定風格',
-                occasion: occasion || '外出遊玩'
-            })
-        });
-    }
-};
+        else:
+            return {'success': False, 'message': '帳號或密碼錯誤'}
+    except Exception as e:
+        return {'success': False, 'message': str(e)}
 
-// ========== 圖片處理工具 ==========
-const ImageUtils = {
-    // 壓縮圖片
-    async compressImage(file, maxWidth = 1200, maxHeight = 1200, quality = 0.8) {
-        return new Promise((resolve, reject) => {
-            const reader = new FileReader();
+def api_register(username: str, password: str):
+    """註冊 API"""
+    if not services['supabase']:
+        return {'success': False, 'message': 'Database not configured'}
+    
+    try:
+        existing = services['supabase'].client.table("users")\
+            .select("id")\
+            .eq("username", username)\
+            .execute()
+        
+        if existing.data:
+            return {'success': False, 'message': '使用者名稱已存在'}
+        
+        result = services['supabase'].client.table("users")\
+            .insert({"username": username, "password": password})\
+            .execute()
+        
+        return {'success': True, 'message': '註冊成功'}
+    except Exception as e:
+        return {'success': False, 'message': str(e)}
+
+def api_weather(city: str = 'Taipei'):
+    """天氣 API"""
+    if not services['weather']:
+        return {'success': False, 'message': 'Weather service not configured'}
+    
+    weather = services['weather'].get_weather(city)
+    if weather:
+        return weather.to_dict()
+    return {'success': False, 'message': 'Weather data not found'}
+
+def api_get_wardrobe(user_id: str):
+    """獲取衣櫥 API"""
+    if not services['supabase']:
+        return {'success': False, 'message': 'Database not configured'}
+    
+    try:
+        result = services['supabase'].client.table("wardrobe")\
+            .select("*")\
+            .eq("user_id", user_id)\
+            .execute()
+        
+        return {
+            'success': True,
+            'items': result.data or []
+        }
+    except Exception as e:
+        return {'success': False, 'message': str(e)}
+
+def api_delete_item(user_id: str, item_id: str):
+    """刪除單個物品 API"""
+    if not services['supabase']:
+        return {'success': False, 'message': 'Database not configured'}
+    
+    try:
+        result = services['supabase'].client.table("wardrobe")\
+            .delete()\
+            .eq("user_id", user_id)\
+            .eq("id", item_id)\
+            .execute()
+        
+        return {
+            'success': True,
+            'deleted': True,
+            'item_id': item_id
+        }
+    except Exception as e:
+        return {'success': False, 'message': str(e)}
+
+def api_batch_delete(user_id: str, item_ids: list):
+    """批量刪除物品 API"""
+    if not services['supabase']:
+        return {'success': False, 'message': 'Database not configured'}
+    
+    try:
+        result = services['supabase'].client.table("wardrobe")\
+            .delete()\
+            .eq("user_id", user_id)\
+            .in_("id", item_ids)\
+            .execute()
+        
+        return {
+            'success': True,
+            'deleted_count': len(item_ids)
+        }
+    except Exception as e:
+        return {'success': False, 'message': str(e)}
+
+def api_get_recommendation(user_id: str, city: str, style: str, occasion: str):
+    """獲取推薦 API"""
+    if not services['ai']:
+        return {'success': False, 'message': 'AI service not configured'}
+    
+    if not services['supabase']:
+        return {'success': False, 'message': 'Database not configured'}
+    
+    try:
+        # 獲取用戶衣櫥
+        wardrobe = services['supabase'].client.table("wardrobe")\
+            .select("*")\
+            .eq("user_id", user_id)\
+            .execute()
+        
+        # 獲取天氣
+        weather = None
+        if services['weather']:
+            weather = services['weather'].get_weather(city)
+        
+        # 生成推薦（這裡需要根據你的 AIService 實現調整）
+        recommendation = services['ai'].generate_recommendation(
+            wardrobe.data,
+            weather,
+            style,
+            occasion
+        )
+        
+        return {
+            'success': True,
+            'recommendation': recommendation
+        }
+    except Exception as e:
+        return {'success': False, 'message': str(e)}
+
+# ========== 創建通信腳本 ==========
+def create_communication_bridge(response_data=None):
+    """創建前後端通信橋接"""
+    response_json = json.dumps(response_data) if response_data else 'null'
+    
+    return f"""
+    <script>
+    // 全局 API 對象
+    window.FashionAPI = {{
+        currentResponse: {response_json},
+        
+        // 登入
+        login: function(username, password) {{
+            const params = new URLSearchParams(window.location.search);
+            params.set('action', 'login');
+            params.set('username', username);
+            params.set('password', password);
+            params.set('t', Date.now());
+            window.location.search = params.toString();
+        }},
+        
+        // 註冊
+        register: function(username, password) {{
+            const params = new URLSearchParams(window.location.search);
+            params.set('action', 'register');
+            params.set('username', username);
+            params.set('password', password);
+            params.set('t', Date.now());
+            window.location.search = params.toString();
+        }},
+        
+        // 獲取天氣
+        getWeather: function(city) {{
+            const params = new URLSearchParams(window.location.search);
+            params.set('action', 'weather');
+            params.set('city', city);
+            params.set('t', Date.now());
+            window.location.search = params.toString();
+        }},
+        
+        // 獲取衣櫥
+        getWardrobe: function(userId) {{
+            const params = new URLSearchParams(window.location.search);
+            params.set('action', 'wardrobe');
+            params.set('user_id', userId);
+            params.set('t', Date.now());
+            window.location.search = params.toString();
+        }},
+        
+        // 刪除單個物品
+        deleteItem: function(userId, itemId) {{
+            const params = new URLSearchParams(window.location.search);
+            params.set('action', 'delete');
+            params.set('user_id', userId);
+            params.set('item_id', itemId);
+            params.set('t', Date.now());
+            window.location.search = params.toString();
+        }},
+        
+        // 批量刪除
+        batchDeleteItems: function(userId, itemIds) {{
+            const params = new URLSearchParams(window.location.search);
+            params.set('action', 'batch_delete');
+            params.set('user_id', userId);
+            params.set('item_ids', JSON.stringify(itemIds));
+            params.set('t', Date.now());
+            window.location.search = params.toString();
+        }},
+        
+        // 獲取推薦
+        getRecommendation: function(userId, city, style, occasion) {{
+            const params = new URLSearchParams(window.location.search);
+            params.set('action', 'recommendation');
+            params.set('user_id', userId);
+            params.set('city', city);
+            params.set('style', style);
+            params.set('occasion', occasion);
+            params.set('t', Date.now());
+            window.location.search = params.toString();
+        }},
+        
+        // 清除參數
+        clearParams: function() {{
+            if (window.location.search) {{
+                window.history.replaceState({{}}, '', window.location.pathname);
+            }}
+        }}
+    }};
+    
+    // 如果有響應數據，觸發事件
+    if (window.FashionAPI.currentResponse) {{
+        window.dispatchEvent(new CustomEvent('apiResponse', {{
+            detail: window.FashionAPI.currentResponse
+        }}));
+        
+        // 清除 URL 參數
+        setTimeout(() => {{
+            window.FashionAPI.clearParams();
+        }}, 100);
+    }}
+    </script>
+    """
+
+# ========== 讀取並渲染前端 ==========
+def load_frontend():
+    """載入完整的前端應用"""
+    
+    # 檢查是否有 API 請求
+    query_params = st.query_params
+    response_data = None
+    
+    if 'action' in query_params:
+        action = query_params['action']
+        
+        if action == 'login':
+            username = query_params.get('username', '')
+            password = query_params.get('password', '')
+            response_data = api_login(username, password)
             
-            reader.onload = (e) => {
-                const img = new Image();
+        elif action == 'register':
+            username = query_params.get('username', '')
+            password = query_params.get('password', '')
+            response_data = api_register(username, password)
+            
+        elif action == 'weather':
+            city = query_params.get('city', 'Taipei')
+            response_data = api_weather(city)
+            
+        elif action == 'wardrobe':
+            user_id = query_params.get('user_id', '')
+            response_data = api_get_wardrobe(user_id)
+            
+        elif action == 'delete':
+            user_id = query_params.get('user_id', '')
+            item_id = query_params.get('item_id', '')
+            response_data = api_delete_item(user_id, item_id)
+            
+        elif action == 'batch_delete':
+            user_id = query_params.get('user_id', '')
+            item_ids_str = query_params.get('item_ids', '[]')
+            try:
+                item_ids = json.loads(item_ids_str)
+                response_data = api_batch_delete(user_id, item_ids)
+            except:
+                response_data = {'success': False, 'message': 'Invalid item_ids'}
                 
-                img.onload = () => {
-                    const canvas = document.createElement('canvas');
-                    let width = img.width;
-                    let height = img.height;
-                    
-                    // 計算縮放比例
-                    if (width > height) {
-                        if (width > maxWidth) {
-                            height = height * (maxWidth / width);
-                            width = maxWidth;
-                        }
-                    } else {
-                        if (height > maxHeight) {
-                            width = width * (maxHeight / height);
-                            height = maxHeight;
-                        }
-                    }
-                    
-                    canvas.width = width;
-                    canvas.height = height;
-                    
-                    const ctx = canvas.getContext('2d');
-                    ctx.drawImage(img, 0, 0, width, height);
-                    
-                    canvas.toBlob((blob) => {
-                        resolve(new File([blob], file.name, {
-                            type: 'image/jpeg',
-                            lastModified: Date.now()
-                        }));
-                    }, 'image/jpeg', quality);
-                };
-                
-                img.onerror = reject;
-                img.src = e.target.result;
-            };
-            
-            reader.onerror = reject;
-            reader.readAsDataURL(file);
-        });
-    },
+        elif action == 'recommendation':
+            user_id = query_params.get('user_id', '')
+            city = query_params.get('city', 'Taipei')
+            style = query_params.get('style', '不限定風格')
+            occasion = query_params.get('occasion', '外出遊玩')
+            response_data = api_get_recommendation(user_id, city, style, occasion)
     
-    // 生成預覽 URL
-    createPreviewURL(file) {
-        return URL.createObjectURL(file);
-    },
+    # 讀取前端文件
+    frontend_dir = Path(__file__).parent / 'frontend'
     
-    // 清理預覽 URL
-    revokePreviewURL(url) {
-        URL.revokeObjectURL(url);
-    },
+    # 讀取 HTML
+    html_file = frontend_dir / 'index.html'
+    with open(html_file, 'r', encoding='utf-8') as f:
+        html_content = f.read()
     
-    // 驗證圖片文件
-    validateImageFile(file) {
-        const validTypes = ['image/jpeg', 'image/png', 'image/jpg'];
-        const maxSize = 10 * 1024 * 1024; // 10MB
-        
-        if (!validTypes.includes(file.type)) {
-            throw new Error(`不支援的檔案類型: ${file.type}`);
-        }
-        
-        if (file.size > maxSize) {
-            throw new Error(`檔案過大: ${(file.size / 1024 / 1024).toFixed(2)}MB (最大 10MB)`);
-        }
-        
-        return true;
-    }
-};
+    # 讀取 CSS
+    css_files = ['style.css', 'upload.css', 'wardrobe.css', 'recommendation.css']
+    css_content = ''
+    for css_file in css_files:
+        css_path = frontend_dir / 'css' / css_file
+        if css_path.exists():
+            with open(css_path, 'r', encoding='utf-8') as f:
+                css_content += f.read() + '\n'
+    
+    # 讀取 JS
+    js_files = ['api.js', 'app.js', 'upload.js', 'wardrobe.js', 'recommendation.js']
+    js_content = ''
+    for js_file in js_files:
+        js_path = frontend_dir / 'js' / js_file
+        if js_path.exists():
+            with open(js_path, 'r', encoding='utf-8') as f:
+                js_content += f.read() + '\n'
+    
+    # 組合完整的 HTML
+    full_html = html_content.replace('</head>', f'<style>{css_content}</style></head>')
+    
+    # 在 body 結束前插入通信橋接和 JS
+    bridge_script = create_communication_bridge(response_data)
+    full_html = full_html.replace('</body>', f'{bridge_script}<script>{js_content}</script></body>')
+    
+    # 渲染
+    components.html(full_html, height=1000, scrolling=True)
 
-// ========== 本地儲存工具 ==========
-const Storage = {
-    set(key, value) {
-        try {
-            localStorage.setItem(key, JSON.stringify(value));
-        } catch (error) {
-            console.error('儲存失敗:', error);
-        }
-    },
-    
-    get(key) {
-        try {
-            const value = localStorage.getItem(key);
-            return value ? JSON.parse(value) : null;
-        } catch (error) {
-            console.error('讀取失敗:', error);
-            return null;
-        }
-    },
-    
-    remove(key) {
-        try {
-            localStorage.removeItem(key);
-        } catch (error) {
-            console.error('刪除失敗:', error);
-        }
-    },
-    
-    clear() {
-        try {
-            localStorage.clear();
-        } catch (error) {
-            console.error('清空失敗:', error);
-        }
-    }
-};
+# ========== 主程式 ==========
+def main():
+    load_frontend()
 
-// ========== 防抖和節流工具 ==========
-const Utils = {
-    // 防抖
-    debounce(func, wait) {
-        let timeout;
-        return function executedFunction(...args) {
-            const later = () => {
-                clearTimeout(timeout);
-                func(...args);
-            };
-            clearTimeout(timeout);
-            timeout = setTimeout(later, wait);
-        };
-    },
-    
-    // 節流
-    throttle(func, limit) {
-        let inThrottle;
-        return function(...args) {
-            if (!inThrottle) {
-                func.apply(this, args);
-                inThrottle = true;
-                setTimeout(() => inThrottle = false, limit);
-            }
-        };
-    },
-    
-    // 格式化日期
-    formatDate(date) {
-        return new Date(date).toLocaleDateString('zh-TW', {
-            year: 'numeric',
-            month: '2-digit',
-            day: '2-digit'
-        });
-    },
-    
-    // 格式化檔案大小
-    formatFileSize(bytes) {
-        if (bytes === 0) return '0 Bytes';
-        const k = 1024;
-        const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-        const i = Math.floor(Math.log(bytes) / Math.log(k));
-        return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
-    }
-};
+if __name__ == "__main__":
+    main()
