@@ -9,14 +9,20 @@ import json
 import sys
 from datetime import datetime
 
-# 添加 backend 到路徑
-sys.path.insert(0, str(Path(__file__).parent / 'backend'))
-
-from config import AppConfig
-from database.supabase_client import SupabaseClient
-from api.ai_service import AIService
-from api.weather_service import WeatherService
-from api.wardrobe_service import WardrobeService
+backend_path = Path(__file__).parent / 'backend'
+if str(backend_path) not in sys.path:
+    sys.path.insert(0, str(backend_path))
+try:
+    from config import AppConfig
+    from database.supabase_client import SupabaseClient
+    from database.models import ClothingItem, WeatherData
+    from api.ai_service import AIService
+    from api.weather_service import WeatherService
+    from api.wardrobe_service import WardrobeService
+except ImportError as e:
+    st.error(f"❌ Import 錯誤: {str(e)}")
+    st.info("請確認 backend/ 目錄下的所有文件都已上傳")
+    st.stop()
 
 # ========== 頁面配置 ==========
 st.set_page_config(
