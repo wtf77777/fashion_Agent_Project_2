@@ -9,11 +9,14 @@ import json
 import sys
 from datetime import datetime
 
-from backend.config import AppConfig
-from backend.database.supabase_client import SupabaseClient
-from backend.api.ai_service import AIService
-from backend.api.weather_service import WeatherService
-from backend.api.wardrobe_service import WardrobeService
+# 添加 backend 到路徑
+sys.path.insert(0, str(Path(__file__).parent / 'backend'))
+
+from config import AppConfig
+from database.supabase_client import SupabaseClient
+from api.ai_service import AIService
+from api.weather_service import WeatherService
+from api.wardrobe_service import WardrobeService
 
 # ========== 頁面配置 ==========
 st.set_page_config(
