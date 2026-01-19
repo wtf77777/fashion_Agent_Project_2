@@ -13,7 +13,7 @@ from datetime import datetime
 sys.path.insert(0, str(Path(__file__).parent / 'backend'))
 
 from config import AppConfig
-from database.supabase_client import SupabaseClient
+from backend.database.supabase_client import SupabaseClient
 from api.ai_service import AIService
 from api.weather_service import WeatherService
 from api.wardrobe_service import WardrobeService
