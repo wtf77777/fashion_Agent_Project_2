@@ -1,1 +1,183 @@
 
+/* ========== 衣櫥頁面樣式 ========== */
+
+/* 操作按鈕區 */
+.wardrobe-actions {
+    display: flex;
+    gap: var(--spacing-sm);
+    margin-bottom: var(--spacing-lg);
+}
+
+.wardrobe-actions .btn {
+    flex: 1;
+}
+
+/* 統計網格 */
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: var(--spacing-md);
+    margin-bottom: var(--spacing-lg);
+}
+
+.stat-card {
+    background: white;
+    padding: var(--spacing-md);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-sm);
+    text-align: center;
+    transition: all 0.3s;
+}
+
+.stat-card:hover {
+    transform: translateY(-4px);
+    box-shadow: var(--shadow-md);
+}
+
+.stat-label {
+    display: block;
+    font-size: 0.9rem;
+    color: var(--gray-600);
+    margin-bottom: 0.5rem;
+}
+
+.stat-value {
+    display: block;
+    font-size: 2rem;
+    font-weight: 700;
+    background: linear-gradient(135deg, var(--primary-color) 0%, var(--primary-dark) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+/* 衣櫥網格 */
+.wardrobe-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: var(--spacing-lg);
+}
+
+/* 衣物卡片 */
+.wardrobe-item {
+    background: white;
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    box-shadow: var(--shadow-md);
+    transition: all 0.3s;
+    position: relative;
+}
+
+.wardrobe-item:hover {
+    transform: translateY(-8px);
+    box-shadow: var(--shadow-xl);
+}
+
+/* 選擇框 */
+.item-checkbox {
+    position: absolute;
+    top: 1rem;
+    left: 1rem;
+    z-index: 10;
+    background: white;
+    padding: 0.5rem;
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-md);
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.item-checkbox input[type="checkbox"] {
+    width: 20px;
+    height: 20px;
+    cursor: pointer;
+}
+
+.item-checkbox label {
+    margin: 0;
+    cursor: pointer;
+    font-weight: 500;
+    color: var(--gray-700);
+}
+
+/* 圖片區域 */
+.item-image {
+    width: 100%;
+    height: 250px;
+    overflow: hidden;
+    position: relative;
+    background: var(--gray-100);
+}
+
+.item-image img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    transition: transform 0.3s;
+}
+
+.wardrobe-item:hover .item-image img {
+    transform: scale(1.1);
+}
+
+/* 資訊區域 */
+.item-info {
+    padding: var(--spacing-md);
+}
+
+.item-name {
+    font-size: 1.2rem;
+    font-weight: 600;
+    color: var(--gray-800);
+    margin: 0 0 var(--spacing-sm) 0;
+}
+
+.item-details {
+    margin-bottom: var(--spacing-md);
+}
+
+.item-details p {
+    margin: 0.5rem 0;
+    font-size: 0.95rem;
+    color: var(--gray-700);
+}
+
+.item-details strong {
+    color: var(--gray-800);
+}
+
+.btn-delete {
+    width: 100%;
+}
+
+/* 空狀態 */
+.empty-state {
+    text-align: center;
+    padding: var(--spacing-xl) 0;
+    color: var(--gray-600);
+}
+
+.empty-state p {
+    font-size: 1.2rem;
+    margin: var(--spacing-md) 0;
+}
+
+/* 響應式設計 */
+@media (max-width: 768px) {
+    .wardrobe-grid {
+        grid-template-columns: 1fr;
+    }
+    
+    .stats-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+    
+    .wardrobe-actions {
+        flex-direction: column;
+    }
+    
+    .item-image {
+        height: 200px;
+    }
+}
