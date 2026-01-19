@@ -1,19 +1,16 @@
 """
-Streamlit API 服務器
-提供前端所需的所有 API 端點
+Streamlit API 服務器 - 修復版本
+使用 Session State 處理登入邏輯
 """
 import streamlit as st
 import streamlit.components.v1 as components
 from pathlib import Path
 import json
-import sys
-from datetime import datetime
 
 from backend.config import AppConfig
 from backend.database.supabase_client import SupabaseClient
 from backend.api.ai_service import AIService
 from backend.api.weather_service import WeatherService
-from backend.api.wardrobe_service import WardrobeService
 
 # ========== 頁面配置 ==========
 st.set_page_config(
@@ -48,6 +45,14 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# ========== 初始化 Session State ==========
+if 'user_id' not in st.session_state:
+    st.session_state.user_id = None
+if 'username' not in st.session_state:
+    st.session_state.username = None
+if 'api_response' not in st.session_state:
+    st.session_state.api_response = None
+
 # ========== 初始化服務 ==========
 @st.cache_resource
 def init_services():
@@ -66,6 +71,121 @@ def init_services():
     return services
 
 services = init_services()
+
+# ========== API 處理函數 ==========
+def api_login(username: str, password: str):
+    """登入 API"""
+    if not services['supabase']:
+        return {'success': False, 'message': 'Database not configured'}
+    
+    try:
+        result = services['supabase'].client.table("users")\
+            .select("*")\
+            .eq("username", username)\
+            .eq("password", password)\
+            .execute()
+        
+        if result.data:
+            # 儲存到 session state
+            st.session_state.user_id = result.data[0]['id']
+            st.session_state.username = username
+            
+            return {
+                'success': True,
+                'user_id': result.data[0]['id'],
+                'username': username
+            }
+        else:
+            return {'success': False, 'message': '帳號或密碼錯誤'}
+    except Exception as e:
+        return {'success': False, 'message': str(e)}
+
+def api_register(username: str, password: str):
+    """註冊 API"""
+    if not services['supabase']:
+        return {'success': False, 'message': 'Database not configured'}
+    
+    try:
+        # 檢查用戶名是否存在
+        existing = services['supabase'].client.table("users")\
+            .select("id")\
+            .eq("username", username)\
+            .execute()
+        
+        if existing.data:
+            return {'success': False, 'message': '使用者名稱已存在'}
+        
+        # 創建新用戶
+        result = services['supabase'].client.table("users")\
+            .insert({"username": username, "password": password})\
+            .execute()
+        
+        return {'success': True, 'message': '註冊成功'}
+    except Exception as e:
+        return {'success': False, 'message': str(e)}
+
+def api_weather(city: str = 'Taipei'):
+    """天氣 API"""
+    if not services['weather']:
+        return None
+    
+    weather = services['weather'].get_weather(city)
+    if weather:
+        return weather.to_dict()
+    return None
+
+# ========== 前端通信橋接 ==========
+def create_bridge_script():
+    """創建 JavaScript 橋接腳本"""
+    return """
+    <script>
+    // Streamlit 通信橋接
+    window.streamlitAPI = {
+        login: function(username, password) {
+            window.parent.postMessage({
+                type: 'streamlit:setComponentValue',
+                data: {
+                    action: 'login',
+                    username: username,
+                    password: password
+                }
+            }, '*');
+        },
+        register: function(username, password) {
+            window.parent.postMessage({
+                type: 'streamlit:setComponentValue',
+                data: {
+                    action: 'register',
+                    username: username,
+                    password: password
+                }
+            }, '*');
+        },
+        getWeather: function(city) {
+            window.parent.postMessage({
+                type: 'streamlit:setComponentValue',
+                data: {
+                    action: 'weather',
+                    city: city
+                }
+            }, '*');
+        }
+    };
+    
+    // 接收 Streamlit 的響應
+    window.addEventListener('message', function(event) {
+        if (event.data.type === 'streamlit:render') {
+            const response = event.data.args.api_response;
+            if (response) {
+                // 觸發自定義事件，讓前端處理
+                window.dispatchEvent(new CustomEvent('apiResponse', {
+                    detail: response
+                }));
+            }
+        }
+    });
+    </script>
+    """
 
 # ========== 讀取並渲染前端 ==========
 def load_frontend():
@@ -95,122 +215,45 @@ def load_frontend():
             with open(js_path, 'r', encoding='utf-8') as f:
                 js_content += f.read() + '\n'
     
-    # 組合完整的 HTML
+    # 組合完整的 HTML，添加橋接腳本
     full_html = html_content.replace('</head>', f'<style>{css_content}</style></head>')
-    full_html = full_html.replace('</body>', f'<script>{js_content}</script></body>')
+    full_html = full_html.replace('</body>', f'{create_bridge_script()}<script>{js_content}</script></body>')
     
-    # 渲染
-    components.html(full_html, height=1000, scrolling=True)
-
-# ========== API 處理函數 ==========
-def handle_api_request():
-    """處理 API 請求"""
-    # 獲取請求參數
-    query_params = st.query_params
+    # 使用雙向通信組件
+    component_value = components.html(
+        full_html, 
+        height=1000, 
+        scrolling=True
+    )
     
-    if 'api' not in query_params:
-        return None
-    
-    api_endpoint = query_params['api']
-    
-    try:
-        # 路由到對應的 API 處理函數
-        if api_endpoint == 'login':
-            return api_login()
-        elif api_endpoint == 'register':
-            return api_register()
-        elif api_endpoint == 'weather':
-            return api_weather()
-        elif api_endpoint == 'upload':
-            return api_upload()
-        elif api_endpoint == 'wardrobe':
-            return api_wardrobe()
-        elif api_endpoint == 'delete':
-            return api_delete_item()
-        elif api_endpoint == 'batch_delete':
-            return api_batch_delete()
-        elif api_endpoint == 'recommendation':
-            return api_recommendation()
-        else:
-            return {'success': False, 'message': 'Unknown API endpoint'}
-    except Exception as e:
-        return {'success': False, 'message': str(e)}
-
-# ========== API 端點實現 ==========
-def api_login():
-    """登入 API"""
-    username = st.query_params.get('username', '')
-    password = st.query_params.get('password', '')
-    
-    if not services['supabase']:
-        return {'success': False, 'message': 'Database not configured'}
-    
-    try:
-        result = services['supabase'].client.table("users")\
-            .select("*")\
-            .eq("username", username)\
-            .eq("password", password)\
-            .execute()
+    # 處理來自前端的請求
+    if component_value:
+        action = component_value.get('action')
         
-        if result.data:
-            return {
-                'success': True,
-                'user_id': result.data[0]['id'],
-                'username': username
-            }
-        else:
-            return {'success': False, 'message': '帳號或密碼錯誤'}
-    except Exception as e:
-        return {'success': False, 'message': str(e)}
-
-def api_register():
-    """註冊 API"""
-    username = st.query_params.get('username', '')
-    password = st.query_params.get('password', '')
-    
-    if not services['supabase']:
-        return {'success': False, 'message': 'Database not configured'}
-    
-    try:
-        # 檢查用戶名是否存在
-        existing = services['supabase'].client.table("users")\
-            .select("id")\
-            .eq("username", username)\
-            .execute()
-        
-        if existing.data:
-            return {'success': False, 'message': '使用者名稱已存在'}
-        
-        # 創建新用戶
-        result = services['supabase'].client.table("users")\
-            .insert({"username": username, "password": password})\
-            .execute()
-        
-        return {'success': True, 'message': '註冊成功'}
-    except Exception as e:
-        return {'success': False, 'message': str(e)}
-
-def api_weather():
-    """天氣 API"""
-    city = st.query_params.get('city', 'Taipei')
-    
-    if not services['weather']:
-        return None
-    
-    weather = services['weather'].get_weather(city)
-    if weather:
-        return weather.to_dict()
-    return None
+        if action == 'login':
+            response = api_login(
+                component_value.get('username'),
+                component_value.get('password')
+            )
+            st.session_state.api_response = response
+            st.rerun()
+            
+        elif action == 'register':
+            response = api_register(
+                component_value.get('username'),
+                component_value.get('password')
+            )
+            st.session_state.api_response = response
+            st.rerun()
+            
+        elif action == 'weather':
+            response = api_weather(component_value.get('city', 'Taipei'))
+            st.session_state.api_response = response
+            st.rerun()
 
 # ========== 主程式 ==========
 def main():
-    # 檢查是否是 API 請求
-    if 'api' in st.query_params:
-        result = handle_api_request()
-        st.json(result)
-    else:
-        # 渲染前端
-        load_frontend()
+    load_frontend()
 
 if __name__ == "__main__":
     main()
