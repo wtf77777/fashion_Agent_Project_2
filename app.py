@@ -1,174 +1,266 @@
-/**
- * API 模塊 - 與 Streamlit 後端通信
- */
+"""
+Streamlit API 服務器 - Streamlit Cloud 優化版本
+使用 localStorage + 輪詢機制處理通信
+"""
+import streamlit as st
+import streamlit.components.v1 as components
+from pathlib import Path
+import json
+import time
 
-// API 響應處理器
-const apiHandlers = {
-    login: null,
-    register: null,
-    weather: null
-};
+from backend.config import AppConfig
+from backend.database.supabase_client import SupabaseClient
+from backend.api.ai_service import AIService
+from backend.api.weather_service import WeatherService
 
-// 監聽 API 響應
-window.addEventListener('apiResponse', (event) => {
-    const response = event.detail;
-    console.log('收到 API 響應:', response);
+# ========== 頁面配置 ==========
+st.set_page_config(
+    page_title="AI Fashion Assistant",
+    page_icon="🌟",
+    layout="wide",
+    initial_sidebar_state="collapsed"
+)
+
+# ========== 隱藏 Streamlit 默認 UI ==========
+st.markdown("""
+<style>
+    header {visibility: hidden;}
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    .stDeployButton {visibility: hidden;}
     
-    // 根據響應類型調用對應的處理器
-    if (response.user_id !== undefined) {
-        // 登入響應
-        if (apiHandlers.login) {
-            apiHandlers.login(response);
-            apiHandlers.login = null;
-        }
-    } else if (response.message === '註冊成功') {
-        // 註冊響應
-        if (apiHandlers.register) {
-            apiHandlers.register(response);
-            apiHandlers.register = null;
-        }
-    } else if (response.temperature !== undefined) {
-        // 天氣響應
-        if (apiHandlers.weather) {
-            apiHandlers.weather(response);
-            apiHandlers.weather = null;
-        }
+    iframe {
+        position: fixed;
+        top: 0;
+        left: 0;
+        bottom: 0;
+        right: 0;
+        width: 100%;
+        height: 100%;
+        border: none;
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+        z-index: 999999;
     }
-});
+</style>
+""", unsafe_allow_html=True)
 
-/**
- * 登入
- */
-async function login(username, password) {
-    return new Promise((resolve, reject) => {
-        // 設置響應處理器
-        apiHandlers.login = (response) => {
-            if (response.success) {
-                // 保存用戶信息到 sessionStorage
-                sessionStorage.setItem('user_id', response.user_id);
-                sessionStorage.setItem('username', response.username);
-                resolve(response);
-            } else {
-                reject(new Error(response.message || '登入失敗'));
-            }
-        };
-        
-        // 調用 Streamlit API
-        if (window.FashionAPI) {
-            window.FashionAPI.login(username, password);
-        } else {
-            reject(new Error('API 未初始化'));
-        }
-        
-        // 設置超時
-        setTimeout(() => {
-            if (apiHandlers.login) {
-                apiHandlers.login = null;
-                reject(new Error('請求超時'));
-            }
-        }, 10000);
-    });
-}
+# ========== 初始化 Session State ==========
+if 'user_id' not in st.session_state:
+    st.session_state.user_id = None
+if 'username' not in st.session_state:
+    st.session_state.username = None
+if 'login_request' not in st.session_state:
+    st.session_state.login_request = None
+if 'register_request' not in st.session_state:
+    st.session_state.register_request = None
 
-/**
- * 註冊
- */
-async function register(username, password) {
-    return new Promise((resolve, reject) => {
-        // 設置響應處理器
-        apiHandlers.register = (response) => {
-            if (response.success) {
-                resolve(response);
-            } else {
-                reject(new Error(response.message || '註冊失敗'));
-            }
-        };
-        
-        // 調用 Streamlit API
-        if (window.FashionAPI) {
-            window.FashionAPI.register(username, password);
-        } else {
-            reject(new Error('API 未初始化'));
-        }
-        
-        // 設置超時
-        setTimeout(() => {
-            if (apiHandlers.register) {
-                apiHandlers.register = null;
-                reject(new Error('請求超時'));
-            }
-        }, 10000);
-    });
-}
-
-/**
- * 獲取天氣信息
- */
-async function getWeather(city = 'Taipei') {
-    return new Promise((resolve, reject) => {
-        // 設置響應處理器
-        apiHandlers.weather = (response) => {
-            if (response.temperature !== undefined) {
-                resolve(response);
-            } else {
-                reject(new Error(response.message || '獲取天氣失敗'));
-            }
-        };
-        
-        // 調用 Streamlit API
-        if (window.FashionAPI) {
-            window.FashionAPI.getWeather(city);
-        } else {
-            reject(new Error('API 未初始化'));
-        }
-        
-        // 設置超時
-        setTimeout(() => {
-            if (apiHandlers.weather) {
-                apiHandlers.weather = null;
-                reject(new Error('請求超時'));
-            }
-        }, 10000);
-    });
-}
-
-/**
- * 登出
- */
-function logout() {
-    sessionStorage.removeItem('user_id');
-    sessionStorage.removeItem('username');
-    // 清除 URL 參數
-    if (window.FashionAPI) {
-        window.FashionAPI.clearParams();
+# ========== 初始化服務 ==========
+@st.cache_resource
+def init_services():
+    """初始化所有服務"""
+    config = AppConfig.from_secrets()
+    if config is None:
+        config = AppConfig.from_env()
+    
+    services = {
+        'config': config,
+        'supabase': SupabaseClient(config.supabase_url, config.supabase_key) if config.supabase_url else None,
+        'ai': AIService(config.gemini_api_key) if config.gemini_api_key else None,
+        'weather': WeatherService(config.weather_api_key) if config.weather_api_key else None
     }
-    // 刷新頁面
-    window.location.reload();
-}
+    
+    return services
 
-/**
- * 檢查是否已登入
- */
-function isLoggedIn() {
-    return sessionStorage.getItem('user_id') !== null;
-}
+services = init_services()
 
-/**
- * 獲取當前用戶信息
- */
-function getCurrentUser() {
-    return {
-        user_id: sessionStorage.getItem('user_id'),
-        username: sessionStorage.getItem('username')
-    };
-}
+# ========== API 處理函數 ==========
+def api_login(username: str, password: str):
+    """登入 API"""
+    if not services['supabase']:
+        return {'success': False, 'message': 'Database not configured'}
+    
+    try:
+        result = services['supabase'].client.table("users")\
+            .select("*")\
+            .eq("username", username)\
+            .eq("password", password)\
+            .execute()
+        
+        if result.data:
+            st.session_state.user_id = result.data[0]['id']
+            st.session_state.username = username
+            
+            return {
+                'success': True,
+                'user_id': result.data[0]['id'],
+                'username': username
+            }
+        else:
+            return {'success': False, 'message': '帳號或密碼錯誤'}
+    except Exception as e:
+        return {'success': False, 'message': str(e)}
 
-// 導出 API
-window.API = {
-    login,
-    register,
-    logout,
-    getWeather,
-    isLoggedIn,
-    getCurrentUser
-};
+def api_register(username: str, password: str):
+    """註冊 API"""
+    if not services['supabase']:
+        return {'success': False, 'message': 'Database not configured'}
+    
+    try:
+        existing = services['supabase'].client.table("users")\
+            .select("id")\
+            .eq("username", username)\
+            .execute()
+        
+        if existing.data:
+            return {'success': False, 'message': '使用者名稱已存在'}
+        
+        result = services['supabase'].client.table("users")\
+            .insert({"username": username, "password": password})\
+            .execute()
+        
+        return {'success': True, 'message': '註冊成功'}
+    except Exception as e:
+        return {'success': False, 'message': str(e)}
+
+def api_weather(city: str = 'Taipei'):
+    """天氣 API"""
+    if not services['weather']:
+        return {'success': False, 'message': 'Weather service not configured'}
+    
+    weather = services['weather'].get_weather(city)
+    if weather:
+        return weather.to_dict()
+    return {'success': False, 'message': 'Weather data not found'}
+
+# ========== 創建通信腳本 ==========
+def create_communication_bridge(response_data=None):
+    """創建前後端通信橋接"""
+    response_json = json.dumps(response_data) if response_data else 'null'
+    
+    return f"""
+    <script>
+    // 全局 API 對象
+    window.FashionAPI = {{
+        currentResponse: {response_json},
+        
+        // 登入
+        login: async function(username, password) {{
+            // 使用 query parameters 觸發 Streamlit 重新運行
+            const params = new URLSearchParams(window.location.search);
+            params.set('action', 'login');
+            params.set('username', username);
+            params.set('password', password);
+            params.set('t', Date.now()); // 添加時間戳避免緩存
+            window.location.search = params.toString();
+        }},
+        
+        // 註冊
+        register: async function(username, password) {{
+            const params = new URLSearchParams(window.location.search);
+            params.set('action', 'register');
+            params.set('username', username);
+            params.set('password', password);
+            params.set('t', Date.now());
+            window.location.search = params.toString();
+        }},
+        
+        // 獲取天氣
+        getWeather: async function(city) {{
+            const params = new URLSearchParams(window.location.search);
+            params.set('action', 'weather');
+            params.set('city', city);
+            params.set('t', Date.now());
+            window.location.search = params.toString();
+        }},
+        
+        // 清除參數
+        clearParams: function() {{
+            if (window.location.search) {{
+                window.history.replaceState({{}}, '', window.location.pathname);
+            }}
+        }}
+    }};
+    
+    // 如果有響應數據，觸發事件
+    if (window.FashionAPI.currentResponse) {{
+        window.dispatchEvent(new CustomEvent('apiResponse', {{
+            detail: window.FashionAPI.currentResponse
+        }}));
+        
+        // 清除 URL 參數
+        setTimeout(() => {{
+            window.FashionAPI.clearParams();
+        }}, 100);
+    }}
+    </script>
+    """
+
+# ========== 讀取並渲染前端 ==========
+def load_frontend():
+    """載入完整的前端應用"""
+    
+    # 檢查是否有 API 請求
+    query_params = st.query_params
+    response_data = None
+    
+    if 'action' in query_params:
+        action = query_params['action']
+        
+        if action == 'login':
+            username = query_params.get('username', '')
+            password = query_params.get('password', '')
+            response_data = api_login(username, password)
+            
+        elif action == 'register':
+            username = query_params.get('username', '')
+            password = query_params.get('password', '')
+            response_data = api_register(username, password)
+            
+        elif action == 'weather':
+            city = query_params.get('city', 'Taipei')
+            response_data = api_weather(city)
+    
+    # 讀取前端文件
+    frontend_dir = Path(__file__).parent / 'frontend'
+    
+    # 讀取 HTML
+    html_file = frontend_dir / 'index.html'
+    with open(html_file, 'r', encoding='utf-8') as f:
+        html_content = f.read()
+    
+    # 讀取 CSS
+    css_files = ['style.css', 'upload.css', 'wardrobe.css', 'recommendation.css']
+    css_content = ''
+    for css_file in css_files:
+        css_path = frontend_dir / 'css' / css_file
+        if css_path.exists():
+            with open(css_path, 'r', encoding='utf-8') as f:
+                css_content += f.read() + '\n'
+    
+    # 讀取 JS
+    js_files = ['api.js', 'app.js', 'upload.js', 'wardrobe.js', 'recommendation.js']
+    js_content = ''
+    for js_file in js_files:
+        js_path = frontend_dir / 'js' / js_file
+        if js_path.exists():
+            with open(js_path, 'r', encoding='utf-8') as f:
+                js_content += f.read() + '\n'
+    
+    # 組合完整的 HTML
+    full_html = html_content.replace('</head>', f'<style>{css_content}</style></head>')
+    
+    # 在 body 結束前插入通信橋接和 JS
+    bridge_script = create_communication_bridge(response_data)
+    full_html = full_html.replace('</body>', f'{bridge_script}<script>{js_content}</script></body>')
+    
+    # 渲染
+    components.html(full_html, height=1000, scrolling=True)
+
+# ========== 主程式 ==========
+def main():
+    load_frontend()
+
+if __name__ == "__main__":
+    main()
