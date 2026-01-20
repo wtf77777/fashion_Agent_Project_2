@@ -1,24 +1,30 @@
 """
 Streamlit API 服務器
-提供前端所需的所有 API 端點
+使用 Query Parameters 處理 API 請求
 """
 import streamlit as st
 import streamlit.components.v1 as components
 from pathlib import Path
 import json
 import sys
-from datetime import datetime
 
 # 添加 backend 到路徑
-sys.path.insert(0, str(Path(__file__).parent / 'backend'))
+backend_path = Path(__file__).parent / 'backend'
+if str(backend_path) not in sys.path:
+    sys.path.insert(0, str(backend_path))
 
-from config import AppConfig
-from database.supabase_client import SupabaseClient
-from api.ai_service import AIService
-from api.weather_service import WeatherService
-from api.wardrobe_service import WardrobeService
+try:
+    from config import AppConfig
+    from database.supabase_client import SupabaseClient
+    from database.models import ClothingItem
+    from api.ai_service import AIService
+    from api.weather_service import WeatherService
+    from api.wardrobe_service import WardrobeService
+except ImportError as e:
+    st.error(f"Import 錯誤: {str(e)}")
+    st.stop()
 
-# ========== 頁面配置 ==========
+# 頁面配置
 st.set_page_config(
     page_title="AI Fashion Assistant",
     page_icon="🌟",
@@ -26,127 +32,121 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# ========== 隱藏 Streamlit 默認 UI ==========
+# 隱藏 Streamlit UI
 st.markdown("""
 <style>
     header {visibility: hidden;}
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     .stDeployButton {visibility: hidden;}
-    
-    iframe {
-        position: fixed;
-        top: 0;
-        left: 0;
-        bottom: 0;
-        right: 0;
-        width: 100%;
-        height: 100%;
-        border: none;
-        margin: 0;
-        padding: 0;
-        overflow: hidden;
-        z-index: 999999;
-    }
+    .main .block-container {padding: 0; max-width: 100%;}
+    iframe {width: 100%; height: 100vh; border: none;}
 </style>
 """, unsafe_allow_html=True)
 
 # ========== 初始化服務 ==========
 @st.cache_resource
 def init_services():
-    """初始化所有服務"""
-    config = AppConfig.from_secrets()
-    if config is None:
-        config = AppConfig.from_env()
+    config = AppConfig.from_secrets() or AppConfig.from_env()
     
-    services = {
+    supabase_client = None
+    if config.supabase_url and config.supabase_key:
+        supabase_client = SupabaseClient(config.supabase_url, config.supabase_key)
+    
+    return {
         'config': config,
-        'supabase': SupabaseClient(config.supabase_url, config.supabase_key) if config.supabase_url else None,
+        'supabase': supabase_client,
         'ai': AIService(config.gemini_api_key) if config.gemini_api_key else None,
-        'weather': WeatherService(config.weather_api_key) if config.weather_api_key else None
+        'weather': WeatherService(config.weather_api_key) if config.weather_api_key else None,
+        'wardrobe': WardrobeService(supabase_client) if supabase_client else None
     }
-    
-    return services
 
-services = init_services()
-
-# ========== 讀取並渲染前端 ==========
-def load_frontend():
-    """載入完整的前端應用"""
+# ========== 讀取前端 ==========
+@st.cache_data
+def load_frontend_files():
     frontend_dir = Path(__file__).parent / 'frontend'
     
-    # 讀取 HTML
-    html_file = frontend_dir / 'index.html'
-    with open(html_file, 'r', encoding='utf-8') as f:
-        html_content = f.read()
-    
-    # 讀取 CSS
-    css_files = ['style.css', 'upload.css', 'wardrobe.css', 'recommendation.css']
-    css_content = ''
-    for css_file in css_files:
-        css_path = frontend_dir / 'css' / css_file
-        if css_path.exists():
-            with open(css_path, 'r', encoding='utf-8') as f:
-                css_content += f.read() + '\n'
-    
-    # 讀取 JS
-    js_files = ['api.js', 'app.js', 'upload.js', 'wardrobe.js', 'recommendation.js']
-    js_content = ''
-    for js_file in js_files:
-        js_path = frontend_dir / 'js' / js_file
-        if js_path.exists():
-            with open(js_path, 'r', encoding='utf-8') as f:
-                js_content += f.read() + '\n'
-    
-    # 組合完整的 HTML
-    full_html = html_content.replace('</head>', f'<style>{css_content}</style></head>')
-    full_html = full_html.replace('</body>', f'<script>{js_content}</script></body>')
-    
-    # 渲染
-    components.html(full_html, height=1000, scrolling=True)
+    try:
+        with open(frontend_dir / 'index.html', 'r', encoding='utf-8') as f:
+            html = f.read()
+        
+        css = ''
+        for file in ['style.css', 'upload.css', 'wardrobe.css', 'recommendation.css']:
+            path = frontend_dir / 'css' / file
+            if path.exists():
+                with open(path, 'r', encoding='utf-8') as f:
+                    css += f.read() + '\n'
+        
+        js = ''
+        for file in ['api.js', 'app.js', 'upload.js', 'wardrobe.js', 'recommendation.js']:
+            path = frontend_dir / 'js' / file
+            if path.exists():
+                with open(path, 'r', encoding='utf-8') as f:
+                    js += f.read() + '\n'
+        
+        # 組合
+        html = html.replace('</head>', f'<style>{css}</style></head>')
+        html = html.replace('</body>', f'<script>{js}</script></body>')
+        
+        # 移除外部引用
+        for tag in [
+            '<link rel="stylesheet" href="css/style.css">',
+            '<link rel="stylesheet" href="css/upload.css">',
+            '<link rel="stylesheet" href="css/wardrobe.css">',
+            '<link rel="stylesheet" href="css/recommendation.css">',
+            '<script src="js/api.js"></script>',
+            '<script src="js/app.js"></script>',
+            '<script src="js/upload.js"></script>',
+            '<script src="js/wardrobe.js"></script>',
+            '<script src="js/recommendation.js"></script>'
+        ]:
+            html = html.replace(tag, '')
+        
+        return html, None
+    except Exception as e:
+        return None, str(e)
 
-# ========== API 處理函數 ==========
-def handle_api_request():
-    """處理 API 請求"""
-    # 獲取請求參數
-    query_params = st.query_params
+# ========== API 處理器 ==========
+def handle_api():
+    """處理所有 API 請求"""
+    services = init_services()
     
-    if 'api' not in query_params:
+    # 從 query_params 獲取 API 端點
+    api_endpoint = st.query_params.get('api', '')
+    
+    if not api_endpoint:
         return None
     
-    api_endpoint = query_params['api']
-    
     try:
-        # 路由到對應的 API 處理函數
+        # 路由
         if api_endpoint == 'login':
-            return api_login()
+            return api_login(services)
         elif api_endpoint == 'register':
-            return api_register()
+            return api_register(services)
         elif api_endpoint == 'weather':
-            return api_weather()
-        elif api_endpoint == 'upload':
-            return api_upload()
+            return api_weather(services)
         elif api_endpoint == 'wardrobe':
-            return api_wardrobe()
-        elif api_endpoint == 'delete':
-            return api_delete_item()
+            return api_wardrobe(services)
+        elif api_endpoint == 'delete_item':
+            return api_delete_item(services)
         elif api_endpoint == 'batch_delete':
-            return api_batch_delete()
+            return api_batch_delete(services)
+        elif api_endpoint == 'upload':
+            return api_upload(services)
         elif api_endpoint == 'recommendation':
-            return api_recommendation()
+            return api_recommendation(services)
         else:
-            return {'success': False, 'message': 'Unknown API endpoint'}
+            return {'success': False, 'message': f'Unknown API: {api_endpoint}'}
     except Exception as e:
         return {'success': False, 'message': str(e)}
 
 # ========== API 端點實現 ==========
-def api_login():
-    """登入 API"""
+def api_login(services):
     username = st.query_params.get('username', '')
     password = st.query_params.get('password', '')
     
     if not services['supabase']:
-        return {'success': False, 'message': 'Database not configured'}
+        return {'success': False, 'message': '資料庫未配置'}
     
     try:
         result = services['supabase'].client.table("users")\
@@ -161,21 +161,18 @@ def api_login():
                 'user_id': result.data[0]['id'],
                 'username': username
             }
-        else:
-            return {'success': False, 'message': '帳號或密碼錯誤'}
+        return {'success': False, 'message': '帳號或密碼錯誤'}
     except Exception as e:
         return {'success': False, 'message': str(e)}
 
-def api_register():
-    """註冊 API"""
+def api_register(services):
     username = st.query_params.get('username', '')
     password = st.query_params.get('password', '')
     
     if not services['supabase']:
-        return {'success': False, 'message': 'Database not configured'}
+        return {'success': False, 'message': '資料庫未配置'}
     
     try:
-        # 檢查用戶名是否存在
         existing = services['supabase'].client.table("users")\
             .select("id")\
             .eq("username", username)\
@@ -184,36 +181,101 @@ def api_register():
         if existing.data:
             return {'success': False, 'message': '使用者名稱已存在'}
         
-        # 創建新用戶
         result = services['supabase'].client.table("users")\
             .insert({"username": username, "password": password})\
             .execute()
         
-        return {'success': True, 'message': '註冊成功'}
+        return {'success': True}
     except Exception as e:
         return {'success': False, 'message': str(e)}
 
-def api_weather():
-    """天氣 API"""
+def api_weather(services):
     city = st.query_params.get('city', 'Taipei')
     
     if not services['weather']:
-        return None
+        return {'success': False, 'message': '天氣服務未配置'}
     
-    weather = services['weather'].get_weather(city)
-    if weather:
-        return weather.to_dict()
-    return None
+    try:
+        weather = services['weather'].get_weather(city)
+        return weather.to_dict() if weather else None
+    except Exception as e:
+        return {'success': False, 'message': str(e)}
+
+def api_wardrobe(services):
+    user_id = st.query_params.get('user_id', '')
+    
+    if not services['wardrobe']:
+        return {'success': False, 'message': '衣櫥服務未配置'}
+    
+    try:
+        items = services['wardrobe'].get_wardrobe(user_id)
+        return {
+            'success': True,
+            'items': [item.to_dict() for item in items]
+        }
+    except Exception as e:
+        return {'success': False, 'message': str(e)}
+
+def api_delete_item(services):
+    user_id = st.query_params.get('user_id', '')
+    item_id = st.query_params.get('item_id', '')
+    
+    if not services['wardrobe']:
+        return {'success': False, 'message': '衣櫥服務未配置'}
+    
+    try:
+        success = services['wardrobe'].delete_item(user_id, int(item_id))
+        return {'success': success}
+    except Exception as e:
+        return {'success': False, 'message': str(e)}
+
+def api_batch_delete(services):
+    user_id = st.query_params.get('user_id', '')
+    item_ids_json = st.query_params.get('item_ids', '[]')
+    
+    if not services['wardrobe']:
+        return {'success': False, 'message': '衣櫥服務未配置'}
+    
+    try:
+        item_ids = json.loads(item_ids_json)
+        success, success_count, fail_count = services['wardrobe'].batch_delete_items(user_id, item_ids)
+        return {
+            'success': success,
+            'success_count': success_count,
+            'fail_count': fail_count
+        }
+    except Exception as e:
+        return {'success': False, 'message': str(e)}
+
+def api_upload(services):
+    # 上傳功能較複雜，暫時返回提示
+    return {
+        'success': False,
+        'message': '上傳功能正在開發中，請先使用其他功能測試'
+    }
+
+def api_recommendation(services):
+    # 推薦功能，暫時返回示例
+    return {
+        'success': False,
+        'message': '推薦功能正在開發中'
+    }
 
 # ========== 主程式 ==========
 def main():
     # 檢查是否是 API 請求
     if 'api' in st.query_params:
-        result = handle_api_request()
+        result = handle_api()
         st.json(result)
-    else:
-        # 渲染前端
-        load_frontend()
+        st.stop()
+    
+    # 渲染前端
+    html, error = load_frontend_files()
+    if error:
+        st.error(f"載入前端失敗: {error}")
+        st.stop()
+    
+    components.html(html, height=800, scrolling=True)
 
 if __name__ == "__main__":
     main()
