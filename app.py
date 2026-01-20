@@ -1,12 +1,13 @@
 """
-Streamlit API 服務器
-使用 Query Parameters 處理 API 請求
+Streamlit API 服務器 - 修復版
+使用 iframe 和 postMessage 實現前後端通信
 """
 import streamlit as st
 import streamlit.components.v1 as components
 from pathlib import Path
 import json
 import sys
+import base64
 
 # 添加 backend 到路徑
 backend_path = Path(__file__).parent / 'backend'
@@ -40,7 +41,6 @@ st.markdown("""
     footer {visibility: hidden;}
     .stDeployButton {visibility: hidden;}
     .main .block-container {padding: 0; max-width: 100%;}
-    iframe {width: 100%; height: 100vh; border: none;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -61,64 +61,15 @@ def init_services():
         'wardrobe': WardrobeService(supabase_client) if supabase_client else None
     }
 
-# ========== 讀取前端 ==========
-@st.cache_data
-def load_frontend_files():
-    frontend_dir = Path(__file__).parent / 'frontend'
-    
-    try:
-        with open(frontend_dir / 'index.html', 'r', encoding='utf-8') as f:
-            html = f.read()
-        
-        css = ''
-        for file in ['style.css', 'upload.css', 'wardrobe.css', 'recommendation.css']:
-            path = frontend_dir / 'css' / file
-            if path.exists():
-                with open(path, 'r', encoding='utf-8') as f:
-                    css += f.read() + '\n'
-        
-        js = ''
-        for file in ['api.js', 'app.js', 'upload.js', 'wardrobe.js', 'recommendation.js']:
-            path = frontend_dir / 'js' / file
-            if path.exists():
-                with open(path, 'r', encoding='utf-8') as f:
-                    js += f.read() + '\n'
-        
-        # 組合
-        html = html.replace('</head>', f'<style>{css}</style></head>')
-        html = html.replace('</body>', f'<script>{js}</script></body>')
-        
-        # 移除外部引用
-        for tag in [
-            '<link rel="stylesheet" href="css/style.css">',
-            '<link rel="stylesheet" href="css/upload.css">',
-            '<link rel="stylesheet" href="css/wardrobe.css">',
-            '<link rel="stylesheet" href="css/recommendation.css">',
-            '<script src="js/api.js"></script>',
-            '<script src="js/app.js"></script>',
-            '<script src="js/upload.js"></script>',
-            '<script src="js/wardrobe.js"></script>',
-            '<script src="js/recommendation.js"></script>'
-        ]:
-            html = html.replace(tag, '')
-        
-        return html, None
-    except Exception as e:
-        return None, str(e)
-
 # ========== API 處理器 ==========
 def handle_api():
-    """處理所有 API 請求"""
     services = init_services()
-    
-    # 從 query_params 獲取 API 端點
     api_endpoint = st.query_params.get('api', '')
     
     if not api_endpoint:
-        return None
+        return {'success': False, 'message': 'No API endpoint specified'}
     
     try:
-        # 路由
         if api_endpoint == 'login':
             return api_login(services)
         elif api_endpoint == 'register':
@@ -131,16 +82,12 @@ def handle_api():
             return api_delete_item(services)
         elif api_endpoint == 'batch_delete':
             return api_batch_delete(services)
-        elif api_endpoint == 'upload':
-            return api_upload(services)
-        elif api_endpoint == 'recommendation':
-            return api_recommendation(services)
         else:
             return {'success': False, 'message': f'Unknown API: {api_endpoint}'}
     except Exception as e:
         return {'success': False, 'message': str(e)}
 
-# ========== API 端點實現 ==========
+# ========== API 端點 ==========
 def api_login(services):
     username = st.query_params.get('username', '')
     password = st.query_params.get('password', '')
@@ -158,7 +105,7 @@ def api_login(services):
         if result.data:
             return {
                 'success': True,
-                'user_id': result.data[0]['id'],
+                'user_id': str(result.data[0]['id']),
                 'username': username
             }
         return {'success': False, 'message': '帳號或密碼錯誤'}
@@ -185,7 +132,7 @@ def api_register(services):
             .insert({"username": username, "password": password})\
             .execute()
         
-        return {'success': True}
+        return {'success': True, 'message': '註冊成功'}
     except Exception as e:
         return {'success': False, 'message': str(e)}
 
@@ -197,7 +144,7 @@ def api_weather(services):
     
     try:
         weather = services['weather'].get_weather(city)
-        return weather.to_dict() if weather else None
+        return weather.to_dict() if weather else {'success': False, 'message': '無法獲取天氣'}
     except Exception as e:
         return {'success': False, 'message': str(e)}
 
@@ -247,32 +194,93 @@ def api_batch_delete(services):
     except Exception as e:
         return {'success': False, 'message': str(e)}
 
-def api_upload(services):
-    # 上傳功能較複雜，暫時返回提示
-    return {
-        'success': False,
-        'message': '上傳功能正在開發中，請先使用其他功能測試'
-    }
+# ========== 讀取前端 ==========
+@st.cache_data
+def load_frontend_files():
+    frontend_dir = Path(__file__).parent / 'frontend'
+    
+    try:
+        with open(frontend_dir / 'index.html', 'r', encoding='utf-8') as f:
+            html = f.read()
+        
+        css = ''
+        for file in ['style.css', 'upload.css', 'wardrobe.css', 'recommendation.css']:
+            path = frontend_dir / 'css' / file
+            if path.exists():
+                with open(path, 'r', encoding='utf-8') as f:
+                    css += f'/* {file} */\n{f.read()}\n\n'
+        
+        js = ''
+        for file in ['api.js', 'app.js', 'upload.js', 'wardrobe.js', 'recommendation.js']:
+            path = frontend_dir / 'js' / file
+            if path.exists():
+                with open(path, 'r', encoding='utf-8') as f:
+                    js += f'// {file}\n{f.read()}\n\n'
+        
+        # 組合 HTML
+        html = html.replace('</head>', f'<style>{css}</style></head>')
+        html = html.replace('</body>', f'<script>{js}</script></body>')
+        
+        # 移除外部引用
+        for tag in [
+            '<link rel="stylesheet" href="css/style.css">',
+            '<link rel="stylesheet" href="css/upload.css">',
+            '<link rel="stylesheet" href="css/wardrobe.css">',
+            '<link rel="stylesheet" href="css/recommendation.css">',
+            '<script src="js/api.js"></script>',
+            '<script src="js/app.js"></script>',
+            '<script src="js/upload.js"></script>',
+            '<script src="js/wardrobe.js"></script>',
+            '<script src="js/recommendation.js"></script>'
+        ]:
+            html = html.replace(tag, '')
+        
+        return html, None
+    except Exception as e:
+        return None, str(e)
 
-def api_recommendation(services):
-    # 推薦功能，暫時返回示例
-    return {
-        'success': False,
-        'message': '推薦功能正在開發中'
-    }
+# ========== 渲染 API 響應頁面 ==========
+def render_api_response(result):
+    """為 API 請求渲染一個純 JSON 響應頁面"""
+    json_str = json.dumps(result, ensure_ascii=False, indent=2)
+    
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <title>API Response</title>
+    </head>
+    <body>
+        <script>
+            // 將結果發送給父窗口
+            if (window.parent !== window) {{
+                window.parent.postMessage({{
+                    type: 'api_response',
+                    data: {json_str}
+                }}, '*');
+            }}
+        </script>
+        <pre>{json_str}</pre>
+    </body>
+    </html>
+    """
+    
+    components.html(html, height=400)
 
 # ========== 主程式 ==========
 def main():
     # 檢查是否是 API 請求
     if 'api' in st.query_params:
         result = handle_api()
-        st.json(result)
+        render_api_response(result)
         st.stop()
     
     # 渲染前端
     html, error = load_frontend_files()
     if error:
         st.error(f"載入前端失敗: {error}")
+        st.info("請確認 frontend/ 目錄下的所有文件都已上傳")
         st.stop()
     
     components.html(html, height=800, scrolling=True)
