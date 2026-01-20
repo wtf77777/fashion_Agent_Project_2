@@ -1,164 +1,129 @@
 // ========== API 配置 ==========
 const API_BASE_URL = window.location.origin;
 
-// ========== Streamlit 專用 API 封裝 ==========
+// ========== API 請求封裝 ==========
 const API = {
-    // 🔥 使用隱藏 iframe + postMessage 獲取 JSON
-    async request(endpoint, params = {}) {
-        return new Promise((resolve, reject) => {
-            const queryString = new URLSearchParams({
-                api: endpoint,
-                ...params,
-                _t: Date.now()
-            }).toString();
+    // 通用請求方法
+    async request(endpoint, options = {}) {
+        const url = `${API_BASE_URL}${endpoint}`;
+        
+        const config = {
+            headers: {
+                'Content-Type': 'application/json',
+                ...options.headers
+            },
+            ...options
+        };
+        
+        // 添加使用者認證
+        const user = AppState.getUser();
+        if (user) {
+            config.headers['X-User-ID'] = user.id;
+            config.headers['X-Username'] = user.username;
+        }
+        
+        try {
+            const response = await fetch(url, config);
             
-            const url = `${API_BASE_URL}?${queryString}`;
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
             
-            // 創建隱藏 iframe
-            const iframe = document.createElement('iframe');
-            iframe.style.cssText = 'position:absolute;width:0;height:0;border:0;';
-            
-            let resolved = false;
-            
-            // 監聽消息
-            const messageHandler = (event) => {
-                if (event.data && event.data.type === 'streamlit_api') {
-                    if (!resolved) {
-                        resolved = true;
-                        cleanup();
-                        resolve(event.data.data);
-                    }
-                }
-            };
-            
-            // 清理函數
-            const cleanup = () => {
-                window.removeEventListener('message', messageHandler);
-                if (iframe.parentNode) {
-                    iframe.parentNode.removeChild(iframe);
-                }
-            };
-            
-            // 超時處理
-            const timeout = setTimeout(() => {
-                if (!resolved) {
-                    resolved = true;
-                    cleanup();
-                    reject(new Error('API 請求超時 (15秒)'));
-                }
-            }, 15000);
-            
-            // iframe 載入完成後的備用方案
-            iframe.onload = () => {
-                setTimeout(() => {
-                    if (!resolved) {
-                        try {
-                            // 嘗試直接讀取 iframe 內容
-                            const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
-                            const pre = iframeDoc.querySelector('#json-data');
-                            if (pre) {
-                                const data = JSON.parse(pre.textContent);
-                                resolved = true;
-                                cleanup();
-                                clearTimeout(timeout);
-                                resolve(data);
-                            }
-                        } catch (e) {
-                            console.warn('無法直接讀取 iframe:', e);
-                        }
-                    }
-                }, 1000);
-            };
-            
-            window.addEventListener('message', messageHandler);
-            iframe.src = url;
-            document.body.appendChild(iframe);
-        });
+            const data = await response.json();
+            return data;
+        } catch (error) {
+            console.error('API 請求失敗:', error);
+            throw error;
+        }
     },
     
     // ========== 認證 API ==========
     async login(username, password) {
-        return this.request('login', {
-            username: username,
-            password: password
+        return this.request('/api/login', {
+            method: 'POST',
+            body: JSON.stringify({ username, password })
         });
     },
     
     async register(username, password) {
-        return this.request('register', {
-            username: username,
-            password: password
+        return this.request('/api/register', {
+            method: 'POST',
+            body: JSON.stringify({ username, password })
         });
     },
     
     // ========== 天氣 API ==========
     async getWeather(city) {
-        return this.request('weather', {
-            city: city
+        return this.request(`/api/weather?city=${encodeURIComponent(city)}`);
+    },
+    
+    // ========== 上傳 API ==========
+    async uploadImages(files) {
+        const formData = new FormData();
+        
+        files.forEach((file, index) => {
+            formData.append(`file_${index}`, file);
         });
+        
+        const user = AppState.getUser();
+        formData.append('user_id', user.id);
+        
+        // 使用 multipart/form-data
+        const response = await fetch(`${API_BASE_URL}/api/upload`, {
+            method: 'POST',
+            headers: {
+                'X-User-ID': user.id,
+                'X-Username': user.username
+            },
+            body: formData
+        });
+        
+        if (!response.ok) {
+            throw new Error(`上傳失敗: ${response.statusText}`);
+        }
+        
+        return response.json();
     },
     
     // ========== 衣櫥 API ==========
-    async getWardrobe(userId) {
-        return this.request('wardrobe', {
-            user_id: userId
-        });
-    },
-    
-    async deleteItem(itemId, userId) {
-        return this.request('delete_item', {
-            item_id: itemId,
-            user_id: userId
-        });
-    },
-    
-    async batchDeleteItems(itemIds, userId) {
-        return this.request('batch_delete', {
-            item_ids: JSON.stringify(itemIds),
-            user_id: userId
-        });
-    },
-    
-    // ========== 上傳 API (特殊處理) ==========
-    async uploadImages(files) {
+    async getWardrobe() {
         const user = AppState.getUser();
-        if (!user) {
-            throw new Error('請先登入');
-        }
-        
-        // 🔥 對於文件上傳，我們需要使用 Base64 編碼
-        const uploadPromises = files.map(async (file, index) => {
-            return new Promise((resolve, reject) => {
-                const reader = new FileReader();
-                reader.onload = () => {
-                    const base64 = reader.result.split(',')[1];
-                    resolve({
-                        name: file.name,
-                        data: base64,
-                        type: file.type
-                    });
-                };
-                reader.onerror = reject;
-                reader.readAsDataURL(file);
-            });
+        return this.request(`/api/wardrobe?user_id=${user.id}`);
+    },
+    
+    async deleteItem(itemId) {
+        const user = AppState.getUser();
+        return this.request('/api/wardrobe/delete', {
+            method: 'POST',
+            body: JSON.stringify({
+                user_id: user.id,
+                item_id: itemId
+            })
         });
-        
-        const filesData = await Promise.all(uploadPromises);
-        
-        return this.request('upload', {
-            user_id: user.id,
-            files: JSON.stringify(filesData)
+    },
+    
+    async batchDeleteItems(itemIds) {
+        const user = AppState.getUser();
+        return this.request('/api/wardrobe/batch-delete', {
+            method: 'POST',
+            body: JSON.stringify({
+                user_id: user.id,
+                item_ids: itemIds
+            })
         });
     },
     
     // ========== 推薦 API ==========
     async getRecommendation(city, style, occasion) {
         const user = AppState.getUser();
-        return this.request('recommendation', {
-            user_id: user.id,
-            city: city,
-            style: style || '不限定風格',
-            occasion: occasion || '外出遊玩'
+        return this.request('/api/recommendation', {
+            method: 'POST',
+            body: JSON.stringify({
+                user_id: user.id,
+                city: city,
+                style: style || '不限定風格',
+                occasion: occasion || '外出遊玩'
+            })
         });
     }
 };
@@ -278,7 +243,7 @@ const Storage = {
     }
 };
 
-// ========== 工具函數 ==========
+// ========== 防抖和節流工具 ==========
 const Utils = {
     // 防抖
     debounce(func, wait) {
