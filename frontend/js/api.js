@@ -1,36 +1,40 @@
 // ========== API 配置 ==========
 const API_BASE_URL = window.location.origin;
 
-// ========== API 請求封裝 ==========
+// ========== Streamlit 專用 API 封裝 ==========
 const API = {
-    // 通用請求方法
-    async request(endpoint, options = {}) {
-        const url = `${API_BASE_URL}${endpoint}`;
+    // 🔥 使用 Query Parameters 傳遞數據（Streamlit 友好方式）
+    async request(endpoint, params = {}) {
+        // 構建 URL 查詢參數
+        const queryString = new URLSearchParams({
+            api: endpoint,
+            ...params,
+            _t: Date.now() // 防止緩存
+        }).toString();
         
-        const config = {
-            headers: {
-                'Content-Type': 'application/json',
-                ...options.headers
-            },
-            ...options
-        };
-        
-        // 添加使用者認證
-        const user = AppState.getUser();
-        if (user) {
-            config.headers['X-User-ID'] = user.id;
-            config.headers['X-Username'] = user.username;
-        }
+        const url = `${API_BASE_URL}?${queryString}`;
         
         try {
-            const response = await fetch(url, config);
+            const response = await fetch(url, {
+                method: 'GET',
+                headers: {
+                    'Accept': 'application/json',
+                }
+            });
             
             if (!response.ok) {
                 throw new Error(`HTTP ${response.status}: ${response.statusText}`);
             }
             
-            const data = await response.json();
-            return data;
+            const text = await response.text();
+            
+            // 嘗試解析 JSON
+            try {
+                return JSON.parse(text);
+            } catch (e) {
+                console.error('無法解析 JSON:', text);
+                throw new Error('服務器返回了無效的 JSON');
+            }
         } catch (error) {
             console.error('API 請求失敗:', error);
             throw error;
@@ -39,91 +43,87 @@ const API = {
     
     // ========== 認證 API ==========
     async login(username, password) {
-        return this.request('/api/login', {
-            method: 'POST',
-            body: JSON.stringify({ username, password })
+        return this.request('login', {
+            username: username,
+            password: password
         });
     },
     
     async register(username, password) {
-        return this.request('/api/register', {
-            method: 'POST',
-            body: JSON.stringify({ username, password })
+        return this.request('register', {
+            username: username,
+            password: password
         });
     },
     
     // ========== 天氣 API ==========
     async getWeather(city) {
-        return this.request(`/api/weather?city=${encodeURIComponent(city)}`);
-    },
-    
-    // ========== 上傳 API ==========
-    async uploadImages(files) {
-        const formData = new FormData();
-        
-        files.forEach((file, index) => {
-            formData.append(`file_${index}`, file);
+        return this.request('weather', {
+            city: city
         });
-        
-        const user = AppState.getUser();
-        formData.append('user_id', user.id);
-        
-        // 使用 multipart/form-data
-        const response = await fetch(`${API_BASE_URL}/api/upload`, {
-            method: 'POST',
-            headers: {
-                'X-User-ID': user.id,
-                'X-Username': user.username
-            },
-            body: formData
-        });
-        
-        if (!response.ok) {
-            throw new Error(`上傳失敗: ${response.statusText}`);
-        }
-        
-        return response.json();
     },
     
     // ========== 衣櫥 API ==========
-    async getWardrobe() {
-        const user = AppState.getUser();
-        return this.request(`/api/wardrobe?user_id=${user.id}`);
-    },
-    
-    async deleteItem(itemId) {
-        const user = AppState.getUser();
-        return this.request('/api/wardrobe/delete', {
-            method: 'POST',
-            body: JSON.stringify({
-                user_id: user.id,
-                item_id: itemId
-            })
+    async getWardrobe(userId) {
+        return this.request('wardrobe', {
+            user_id: userId
         });
     },
     
-    async batchDeleteItems(itemIds) {
+    async deleteItem(itemId, userId) {
+        return this.request('delete_item', {
+            item_id: itemId,
+            user_id: userId
+        });
+    },
+    
+    async batchDeleteItems(itemIds, userId) {
+        return this.request('batch_delete', {
+            item_ids: JSON.stringify(itemIds),
+            user_id: userId
+        });
+    },
+    
+    // ========== 上傳 API (特殊處理) ==========
+    async uploadImages(files) {
         const user = AppState.getUser();
-        return this.request('/api/wardrobe/batch-delete', {
-            method: 'POST',
-            body: JSON.stringify({
-                user_id: user.id,
-                item_ids: itemIds
-            })
+        if (!user) {
+            throw new Error('請先登入');
+        }
+        
+        // 🔥 對於文件上傳，我們需要使用 Base64 編碼
+        const uploadPromises = files.map(async (file, index) => {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => {
+                    const base64 = reader.result.split(',')[1];
+                    resolve({
+                        name: file.name,
+                        data: base64,
+                        type: file.type
+                    });
+                };
+                reader.onerror = reject;
+                reader.readAsDataURL(file);
+            });
+        });
+        
+        const filesData = await Promise.all(uploadPromises);
+        
+        return this.request('upload', {
+            user_id: user.id,
+            files: JSON.stringify(filesData)
         });
     },
     
     // ========== 推薦 API ==========
     async getRecommendation(city, style, occasion) {
         const user = AppState.getUser();
-        return this.request('/api/recommendation', {
-            method: 'POST',
-            body: JSON.stringify({
-                user_id: user.id,
-                city: city,
-                style: style || '不限定風格',
-                occasion: occasion || '外出遊玩'
-            })
+        return this.request('recommendation', {
+            user_id: user.id,
+            city: city,
+            style: style || '不限定風格',
+            occasion: occasion || '外出遊玩'
         });
     }
 };
@@ -243,7 +243,7 @@ const Storage = {
     }
 };
 
-// ========== 防抖和節流工具 ==========
+// ========== 工具函數 ==========
 const Utils = {
     // 防抖
     debounce(func, wait) {
