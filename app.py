@@ -1,13 +1,12 @@
 """
-Streamlit API 服務器 - 修復版
-使用 iframe 和 postMessage 實現前後端通信
+Streamlit API 服務器 - 終極修復版
+完全分離 API 響應和前端渲染
 """
 import streamlit as st
 import streamlit.components.v1 as components
 from pathlib import Path
 import json
 import sys
-import base64
 
 # 添加 backend 到路徑
 backend_path = Path(__file__).parent / 'backend'
@@ -33,17 +32,6 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# 隱藏 Streamlit UI
-st.markdown("""
-<style>
-    header {visibility: hidden;}
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    .stDeployButton {visibility: hidden;}
-    .main .block-container {padding: 0; max-width: 100%;}
-</style>
-""", unsafe_allow_html=True)
-
 # ========== 初始化服務 ==========
 @st.cache_resource
 def init_services():
@@ -67,7 +55,7 @@ def handle_api():
     api_endpoint = st.query_params.get('api', '')
     
     if not api_endpoint:
-        return {'success': False, 'message': 'No API endpoint specified'}
+        return {'success': False, 'message': 'No API endpoint'}
     
     try:
         if api_endpoint == 'login':
@@ -144,7 +132,7 @@ def api_weather(services):
     
     try:
         weather = services['weather'].get_weather(city)
-        return weather.to_dict() if weather else {'success': False, 'message': '無法獲取天氣'}
+        return weather.to_dict() if weather else {'success': False}
     except Exception as e:
         return {'success': False, 'message': str(e)}
 
@@ -196,7 +184,7 @@ def api_batch_delete(services):
 
 # ========== 讀取前端 ==========
 @st.cache_data
-def load_frontend_files():
+def load_frontend():
     frontend_dir = Path(__file__).parent / 'frontend'
     
     try:
@@ -208,20 +196,18 @@ def load_frontend_files():
             path = frontend_dir / 'css' / file
             if path.exists():
                 with open(path, 'r', encoding='utf-8') as f:
-                    css += f'/* {file} */\n{f.read()}\n\n'
+                    css += f.read() + '\n'
         
         js = ''
         for file in ['api.js', 'app.js', 'upload.js', 'wardrobe.js', 'recommendation.js']:
             path = frontend_dir / 'js' / file
             if path.exists():
                 with open(path, 'r', encoding='utf-8') as f:
-                    js += f'// {file}\n{f.read()}\n\n'
+                    js += f.read() + '\n'
         
-        # 組合 HTML
         html = html.replace('</head>', f'<style>{css}</style></head>')
         html = html.replace('</body>', f'<script>{js}</script></body>')
         
-        # 移除外部引用
         for tag in [
             '<link rel="stylesheet" href="css/style.css">',
             '<link rel="stylesheet" href="css/upload.css">',
@@ -239,48 +225,62 @@ def load_frontend_files():
     except Exception as e:
         return None, str(e)
 
-# ========== 渲染 API 響應頁面 ==========
-def render_api_response(result):
-    """為 API 請求渲染一個純 JSON 響應頁面"""
-    json_str = json.dumps(result, ensure_ascii=False, indent=2)
-    
-    html = f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <meta charset="UTF-8">
-        <title>API Response</title>
-    </head>
-    <body>
-        <script>
-            // 將結果發送給父窗口
-            if (window.parent !== window) {{
-                window.parent.postMessage({{
-                    type: 'api_response',
-                    data: {json_str}
-                }}, '*');
-            }}
-        </script>
-        <pre>{json_str}</pre>
-    </body>
-    </html>
-    """
-    
-    components.html(html, height=400)
-
 # ========== 主程式 ==========
 def main():
-    # 檢查是否是 API 請求
+    # 🔥 關鍵：API 請求返回純 JSON
     if 'api' in st.query_params:
+        # 隱藏所有 Streamlit UI
+        st.markdown("""
+        <style>
+            header, footer, .stDeployButton, .stDecoration, 
+            .stToolbar, #MainMenu {display: none !important;}
+            .main {padding: 0 !important;}
+            .block-container {padding: 0 !important; max-width: 100% !important;}
+        </style>
+        """, unsafe_allow_html=True)
+        
         result = handle_api()
-        render_api_response(result)
+        json_str = json.dumps(result, ensure_ascii=False)
+        
+        # 🔥 使用純 HTML 輸出 JSON
+        st.markdown(f"""
+        <html>
+        <head><meta charset="UTF-8"></head>
+        <body>
+        <pre id="json-data">{json_str}</pre>
+        <script>
+            // 發送給父窗口
+            if (window.parent !== window) {{
+                try {{
+                    const data = JSON.parse(document.getElementById('json-data').textContent);
+                    window.parent.postMessage({{
+                        type: 'streamlit_api',
+                        data: data
+                    }}, '*');
+                }} catch(e) {{
+                    console.error('JSON parse error:', e);
+                }}
+            }}
+        </script>
+        </body>
+        </html>
+        """, unsafe_allow_html=True)
         st.stop()
     
     # 渲染前端
-    html, error = load_frontend_files()
+    st.markdown("""
+    <style>
+        header {visibility: hidden;}
+        #MainMenu {visibility: hidden;}
+        footer {visibility: hidden;}
+        .stDeployButton {visibility: hidden;}
+        .main .block-container {padding: 0; max-width: 100%;}
+    </style>
+    """, unsafe_allow_html=True)
+    
+    html, error = load_frontend()
     if error:
-        st.error(f"載入前端失敗: {error}")
-        st.info("請確認 frontend/ 目錄下的所有文件都已上傳")
+        st.error(f"載入失敗: {error}")
         st.stop()
     
     components.html(html, height=800, scrolling=True)
