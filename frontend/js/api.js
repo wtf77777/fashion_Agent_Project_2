@@ -3,10 +3,9 @@ const API_BASE_URL = window.location.origin;
 
 // ========== Streamlit 專用 API 封裝 ==========
 const API = {
-    // 🔥 使用 iframe 方式調用 API
+    // 🔥 使用隱藏 iframe + postMessage 獲取 JSON
     async request(endpoint, params = {}) {
         return new Promise((resolve, reject) => {
-            // 構建 URL
             const queryString = new URLSearchParams({
                 api: endpoint,
                 ...params,
@@ -15,35 +14,64 @@ const API = {
             
             const url = `${API_BASE_URL}?${queryString}`;
             
-            // 創建隱藏的 iframe
+            // 創建隱藏 iframe
             const iframe = document.createElement('iframe');
-            iframe.style.display = 'none';
-            iframe.src = url;
+            iframe.style.cssText = 'position:absolute;width:0;height:0;border:0;';
             
-            // 監聽來自 iframe 的消息
+            let resolved = false;
+            
+            // 監聽消息
             const messageHandler = (event) => {
-                if (event.data && event.data.type === 'api_response') {
-                    // 清理
-                    window.removeEventListener('message', messageHandler);
-                    document.body.removeChild(iframe);
-                    
-                    // 返回結果
-                    resolve(event.data.data);
+                if (event.data && event.data.type === 'streamlit_api') {
+                    if (!resolved) {
+                        resolved = true;
+                        cleanup();
+                        resolve(event.data.data);
+                    }
                 }
             };
             
-            window.addEventListener('message', messageHandler);
+            // 清理函數
+            const cleanup = () => {
+                window.removeEventListener('message', messageHandler);
+                if (iframe.parentNode) {
+                    iframe.parentNode.removeChild(iframe);
+                }
+            };
             
             // 超時處理
-            setTimeout(() => {
-                window.removeEventListener('message', messageHandler);
-                if (document.body.contains(iframe)) {
-                    document.body.removeChild(iframe);
+            const timeout = setTimeout(() => {
+                if (!resolved) {
+                    resolved = true;
+                    cleanup();
+                    reject(new Error('API 請求超時 (15秒)'));
                 }
-                reject(new Error('API 請求超時'));
-            }, 15000); // 15 秒超時
+            }, 15000);
             
-            // 添加到頁面
+            // iframe 載入完成後的備用方案
+            iframe.onload = () => {
+                setTimeout(() => {
+                    if (!resolved) {
+                        try {
+                            // 嘗試直接讀取 iframe 內容
+                            const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
+                            const pre = iframeDoc.querySelector('#json-data');
+                            if (pre) {
+                                const data = JSON.parse(pre.textContent);
+                                resolved = true;
+                                cleanup();
+                                clearTimeout(timeout);
+                                resolve(data);
+                            }
+                        } catch (e) {
+                            console.warn('無法直接讀取 iframe:', e);
+                        }
+                    }
+                }, 1000);
+            };
+            
+            window.addEventListener('message', messageHandler);
+            iframe.src = url;
             document.body.appendChild(iframe);
         });
     },
