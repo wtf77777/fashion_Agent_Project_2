@@ -3,42 +3,49 @@ const API_BASE_URL = window.location.origin;
 
 // ========== Streamlit 專用 API 封裝 ==========
 const API = {
-    // 🔥 使用 Query Parameters 傳遞數據（Streamlit 友好方式）
+    // 🔥 使用 iframe 方式調用 API
     async request(endpoint, params = {}) {
-        // 構建 URL 查詢參數
-        const queryString = new URLSearchParams({
-            api: endpoint,
-            ...params,
-            _t: Date.now() // 防止緩存
-        }).toString();
-        
-        const url = `${API_BASE_URL}?${queryString}`;
-        
-        try {
-            const response = await fetch(url, {
-                method: 'GET',
-                headers: {
-                    'Accept': 'application/json',
+        return new Promise((resolve, reject) => {
+            // 構建 URL
+            const queryString = new URLSearchParams({
+                api: endpoint,
+                ...params,
+                _t: Date.now()
+            }).toString();
+            
+            const url = `${API_BASE_URL}?${queryString}`;
+            
+            // 創建隱藏的 iframe
+            const iframe = document.createElement('iframe');
+            iframe.style.display = 'none';
+            iframe.src = url;
+            
+            // 監聽來自 iframe 的消息
+            const messageHandler = (event) => {
+                if (event.data && event.data.type === 'api_response') {
+                    // 清理
+                    window.removeEventListener('message', messageHandler);
+                    document.body.removeChild(iframe);
+                    
+                    // 返回結果
+                    resolve(event.data.data);
                 }
-            });
+            };
             
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-            }
+            window.addEventListener('message', messageHandler);
             
-            const text = await response.text();
+            // 超時處理
+            setTimeout(() => {
+                window.removeEventListener('message', messageHandler);
+                if (document.body.contains(iframe)) {
+                    document.body.removeChild(iframe);
+                }
+                reject(new Error('API 請求超時'));
+            }, 15000); // 15 秒超時
             
-            // 嘗試解析 JSON
-            try {
-                return JSON.parse(text);
-            } catch (e) {
-                console.error('無法解析 JSON:', text);
-                throw new Error('服務器返回了無效的 JSON');
-            }
-        } catch (error) {
-            console.error('API 請求失敗:', error);
-            throw error;
-        }
+            // 添加到頁面
+            document.body.appendChild(iframe);
+        });
     },
     
     // ========== 認證 API ==========
